@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { PhoneCall, AlertOctagon, ShieldAlert, ArrowRight } from 'lucide-react';
 
 interface RoadblockModalProps {
-  type: 'LINE_DROPPED' | 'CLOCK_TAMPERED' | 'HOSTILE_CALLER';
+  type: 'LINE_DROPPED' | 'CLOCK_TAMPERED' | 'HOSTILE_CALLER' | 'OFFENSIVE_ABUSE';
   graceSeconds?: number;
   onRedial?: () => void;
   onDismiss?: () => void;
@@ -33,6 +33,33 @@ export const RoadblockModal: React.FC<RoadblockModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm flex items-center justify-center p-4">
       <div className="bg-slate-900 border border-slate-700/80 rounded-3xl max-w-md w-full p-6 shadow-2xl animate-in fade-in zoom-in-95 duration-150">
+        {type === 'OFFENSIVE_ABUSE' && (
+          <div className="text-center space-y-4">
+            <div className="w-16 h-16 rounded-2xl bg-red-950/80 border border-red-800 text-red-400 mx-auto flex items-center justify-center">
+              <AlertOctagon className="w-8 h-8" />
+            </div>
+
+            <div>
+              <span className="text-xs uppercase font-bold tracking-widest text-red-400">
+                Immediate Termination
+              </span>
+              <h2 className="text-xl font-bold text-slate-100 mt-1">
+                Abusive Language Violation
+              </h2>
+              <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
+                Explicit threats, harassment, or severe vulgarity detected. Under Commonwealth Public Service staff safety regulations, the line was cut immediately.
+              </p>
+            </div>
+
+            <button
+              onClick={onDismiss}
+              className="w-full py-3 bg-red-700 hover:bg-red-600 text-white font-semibold rounded-2xl flex items-center justify-center gap-2 transition cursor-pointer"
+            >
+              <span>Return to Keypad</span>
+            </button>
+          </div>
+        )}
+
         {type === 'LINE_DROPPED' && (
           <div className="text-center space-y-4">
             <div className="w-16 h-16 rounded-2xl bg-red-950/80 border border-red-800 text-red-400 mx-auto flex items-center justify-center animate-bounce">
@@ -112,10 +139,10 @@ export const RoadblockModal: React.FC<RoadblockModalProps> = ({
                 Policy Enforcement
               </span>
               <h2 className="text-xl font-bold text-slate-100 mt-1">
-                Uncontrolled Screaming Detected
+                Persistent Screaming Demotion
               </h2>
               <p className="text-xs text-slate-400 mt-1.5 leading-relaxed">
-                Your microphone exceeded the maximum permissible decibel limit (&gt;82 dB). Services Australia maintains a zero-tolerance policy for aggressive yelling. You have been demoted back to the automated menu.
+                You logged 6 shouting warnings (&gt;82 dB) within the 2-minute calm-down window. Services Australia staff have returned your call to the queue.
               </p>
             </div>
 
@@ -123,7 +150,7 @@ export const RoadblockModal: React.FC<RoadblockModalProps> = ({
               onClick={onDismiss}
               className="w-full py-3 bg-rose-700 hover:bg-rose-600 text-white font-semibold rounded-2xl flex items-center justify-center gap-2 transition cursor-pointer"
             >
-              <span>Return to Automated Menu</span>
+              <span>Return to Call</span>
             </button>
           </div>
         )}

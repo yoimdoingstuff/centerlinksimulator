@@ -13,6 +13,8 @@ import {
   Flame,
   AlertTriangle,
 } from 'lucide-react';
+import { holdMusic } from '../audio/holdSynthesizer';
+import { speechEngine } from '../audio/speechEngine';
 
 interface IOSInCallScreenProps {
   callStatus: CallStatus;
@@ -23,6 +25,9 @@ interface IOSInCallScreenProps {
   messages: DialogueMessage[];
   currentMenuPrompt: string;
   agentName?: string;
+  screamStrikes?: number;
+  screamTimer?: number;
+  isScreamImmune?: boolean;
   onHangUp: () => void;
   onKeypadPress: (key: string) => void;
   onToggleMic: () => void;
@@ -37,12 +42,16 @@ export const IOSInCallScreen: React.FC<IOSInCallScreenProps> = ({
   messages,
   currentMenuPrompt,
   agentName,
+  screamStrikes = 0,
+  screamTimer = 0,
+  isScreamImmune = false,
   onHangUp,
   onKeypadPress,
   onToggleMic,
 }) => {
   const [showInCallKeypad, setShowInCallKeypad] = useState<boolean>(false);
-  const [isSpeakerMuted, setIsSpeakerMuted] = useState<boolean>(false);
+  const [isSpeakerBoost, setIsSpeakerBoost] = useState<boolean>(false);
+  const subtitleScrollRef = React.useRef<HTMLDivElement>(null);
 
   const formatTimer = (totalSec: number) => {
     const mins = Math.floor(totalSec / 60);
@@ -62,8 +71,11 @@ export const IOSInCallScreen: React.FC<IOSInCallScreenProps> = ({
   };
 
   const handleSpeakerClick = () => {
-    triggerHaptic('medium');
-    setIsSpeakerMuted(!isSpeakerMuted);
+    triggerHaptic('heavy');
+    const next = !isSpeakerBoost;
+    setIsSpeakerBoost(next);
+    holdMusic.setSpeakerBoost(next);
+    speechEngine.setSpeakerBoost(next);
   };
 
   const handleKeypadToggle = () => {
@@ -77,6 +89,12 @@ export const IOSInCallScreen: React.FC<IOSInCallScreenProps> = ({
   };
 
   const lastMessage = messages[messages.length - 1];
+
+  React.useEffect(() => {
+    if (subtitleScrollRef.current) {
+      subtitleScrollRef.current.scrollTop = subtitleScrollRef.current.scrollHeight;
+    }
+  }, [messages, lastMessage]);
 
   // Exact iOS 7 behavior:
   // While dialing: "calling Centrelink..."
@@ -103,18 +121,37 @@ export const IOSInCallScreen: React.FC<IOSInCallScreenProps> = ({
 
   return (
     <div className="w-full max-w-sm mx-auto flex flex-col items-center select-none py-2 px-3 text-white">
-      {/* Caller Header: Centrelink + Just Timer once connected */}
-      <div className="text-center mb-5">
+      {/* Caller Header: Centrelink / Agent Name + Just Timer once connected */}
+      <div className="text-center mb-4">
         <h2 className="text-3xl sm:text-4xl font-light tracking-wide text-white drop-shadow-sm">
-          Centrelink
+          {callStatus === 'AGENT_TALKING' ? (agentName || 'Sharon') : 'Centrelink'}
         </h2>
         <p className="text-sm font-light text-white/90 mt-1 tracking-wider tabular-nums font-mono">
           {subtitleText}
         </p>
       </div>
 
+      {/* Scream / Hostility Strikes Warning Banner */}
+      {screamStrikes > 0 && (
+        <div className="w-full max-w-[310px] mb-3 px-3 py-1.5 rounded-xl bg-red-500/25 border border-red-400/40 backdrop-blur-md flex items-center justify-between text-[11px] text-red-200 shadow-sm animate-in fade-in duration-150">
+          <div className="flex items-center gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+            <span className="font-semibold">
+              Hostility: {screamStrikes}/6 Strikes
+            </span>
+          </div>
+          <div className="text-[10px] tabular-nums text-red-300 font-mono">
+            {isScreamImmune ? (
+              <span className="text-amber-300 font-medium">10s Delay Immune</span>
+            ) : (
+              <span>Calm: {formatTimer(screamTimer)}</span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Voice Decibel Indicator (Subtle translucent iOS bar) */}
-      <div className="w-full max-w-[310px] bg-black/25 backdrop-blur-md rounded-2xl p-2.5 mb-5 border border-white/20 shadow-xs">
+      <div className="w-full max-w-[310px] bg-black/25 backdrop-blur-md rounded-2xl p-2.5 mb-3 border border-white/20 shadow-xs">
         <div className="flex items-center justify-between text-[11px] mb-1 font-mono">
           <span className="text-white/80 flex items-center gap-1 font-sans">
             {!isMicActive ? (
@@ -127,7 +164,7 @@ export const IOSInCallScreen: React.FC<IOSInCallScreenProps> = ({
               </span>
             ) : currentZone === 'SCREAMING' ? (
               <span className="text-red-400 flex items-center gap-1">
-                <AlertTriangle className="w-3.5 h-3.5" /> Too Loud!
+                <AlertTriangle className="w-3.5 h-3.5" /> Screaming (&gt;82 dB)
               </span>
             ) : (
               <span className="text-white/70 flex items-center gap-1">
@@ -167,18 +204,21 @@ export const IOSInCallScreen: React.FC<IOSInCallScreenProps> = ({
         </div>
       </div>
 
-      {/* Live Audio Dialogue Subtitle Banner */}
-      <div className="w-full max-w-[310px] bg-black/30 backdrop-blur-md rounded-2xl p-3 mb-6 border border-white/20 min-h-[70px] flex items-center text-xs leading-relaxed text-white/95 shadow-md">
+      {/* Live Audio Dialogue Subtitle Banner (Full scrollable view without line cutoff!) */}
+      <div
+        ref={subtitleScrollRef}
+        className="w-full max-w-[310px] bg-black/35 backdrop-blur-md rounded-2xl p-3 mb-5 border border-white/20 min-h-[75px] max-h-[110px] overflow-y-auto text-xs leading-relaxed text-white/95 shadow-md flex flex-col justify-start"
+      >
         {lastMessage ? (
           <div>
-            <span className="text-[10px] font-bold uppercase tracking-wider block text-white/70 mb-0.5">
+            <span className="text-[10px] font-bold uppercase tracking-wider block text-white/70 mb-0.5 sticky top-0 bg-transparent">
               {lastMessage.sender === 'USER'
                 ? 'You said:'
                 : lastMessage.sender === 'AGENT'
                 ? `${agentName || 'Sharon'} (Centrelink):`
                 : 'Centrelink IVR:'}
             </span>
-            <p className="line-clamp-3 font-light">{lastMessage.text}</p>
+            <p className="font-light whitespace-pre-wrap break-words">{lastMessage.text}</p>
           </div>
         ) : (
           <p className="text-white/60 italic font-light">
@@ -268,7 +308,7 @@ export const IOSInCallScreen: React.FC<IOSInCallScreenProps> = ({
             <span className="text-xs font-light text-white/90">keypad</span>
           </button>
 
-          {/* 3. Speaker */}
+          {/* 3. Speaker (Louder Speakerphone) */}
           <button
             type="button"
             onClick={handleSpeakerClick}
@@ -276,18 +316,16 @@ export const IOSInCallScreen: React.FC<IOSInCallScreenProps> = ({
           >
             <div
               className={`w-18 h-18 sm:w-19 sm:h-19 rounded-full flex items-center justify-center transition border ${
-                isSpeakerMuted
-                  ? 'bg-white text-slate-900 border-white'
+                isSpeakerBoost
+                  ? 'bg-white text-slate-900 border-white shadow-lg'
                   : 'border-white/50 bg-white/10 hover:bg-white/20 active:bg-white/35 backdrop-blur-md text-white'
               }`}
             >
-              {isSpeakerMuted ? (
-                <VolumeX className="w-7 h-7 stroke-[1.8]" />
-              ) : (
-                <Volume2 className="w-7 h-7 stroke-[1.8]" />
-              )}
+              <Volume2 className="w-7 h-7 stroke-[1.8]" />
             </div>
-            <span className="text-xs font-light text-white/90">speaker</span>
+            <span className="text-xs font-light text-white/90">
+              {isSpeakerBoost ? 'speaker on' : 'speaker'}
+            </span>
           </button>
 
           {/* 4. Add Call */}
@@ -295,7 +333,6 @@ export const IOSInCallScreen: React.FC<IOSInCallScreenProps> = ({
             type="button"
             onClick={() => {
               triggerHaptic('selection');
-              alert('Centrelink: 3-way calling is not permitted.');
             }}
             className="flex flex-col items-center gap-1.5 cursor-pointer opacity-50"
           >

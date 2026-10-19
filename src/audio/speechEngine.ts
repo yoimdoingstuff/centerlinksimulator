@@ -19,11 +19,16 @@ class SpeechEngine {
   private currentUtterance: SpeechSynthesisUtterance | null = null;
   private isSpeaking: boolean = false;
   private officeFoleyInterval: number | null = null;
+  private isSpeakerBoost: boolean = false;
 
   constructor() {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       this.synth = window.speechSynthesis;
     }
+  }
+
+  public setSpeakerBoost(enabled: boolean): void {
+    this.isSpeakerBoost = enabled;
   }
 
   public playPromptBeep(): void {
@@ -78,6 +83,7 @@ class SpeechEngine {
     // Robotic parameters: slightly faster rate, higher or very flat monotone pitch
     utterance.rate = 1.08;
     utterance.pitch = 0.95;
+    utterance.volume = this.isSpeakerBoost ? 1.0 : 0.65;
 
     // Pick an English voice
     const voices = this.synth.getVoices();
@@ -140,7 +146,7 @@ class SpeechEngine {
     }
 
     this.stop();
-    this.playPromptBeep();
+    // Do NOT play robotic telephone prompt beep for human representatives!
 
     if (!this.synth) {
       if (onEnd) onEnd();
@@ -159,12 +165,19 @@ class SpeechEngine {
     this.isSpeaking = true;
     this.startKeyboardTypingFoley();
 
-    const utterance = new SpeechSynthesisUtterance(text);
+    // Natural pacing: add slight micro-pauses so the human speaker sounds authentic
+    const naturalText = text
+      .replace(/\.\.\./g, ' — ')
+      .replace(/([,;:])\s*/g, '$1 ')
+      .trim();
+
+    const utterance = new SpeechSynthesisUtterance(naturalText);
     this.currentUtterance = utterance;
 
-    // Pitch and rate from representative config
-    utterance.rate = voiceOpts?.rate ?? 0.96;
+    // Pitch and rate tailored for natural human inflection
+    utterance.rate = voiceOpts?.rate ?? 0.95;
     utterance.pitch = voiceOpts?.pitch ?? 1.0;
+    utterance.volume = this.isSpeakerBoost ? 1.0 : 0.65;
 
     const voices = this.synth.getVoices();
     const hints = voiceOpts?.voiceHints || [];
@@ -172,38 +185,54 @@ class SpeechEngine {
 
     let selectedVoice: SpeechSynthesisVoice | undefined;
 
-    // 1. Try matching specific name hints first
+    // Helper: detect premium natural/neural voices
+    const isNatural = (v: SpeechSynthesisVoice) =>
+      /natural|neural|online|enhanced|google|siri|premium|microsoft/i.test(v.name);
+
+    // 1. Try matching specific representative name/locale hints with natural quality
     for (const hint of hints) {
-      selectedVoice = voices.find((v) => v.name.toLowerCase().includes(hint.toLowerCase()));
-      if (selectedVoice) break;
+      const match = voices.find(
+        (v) => v.name.toLowerCase().includes(hint.toLowerCase()) && isNatural(v)
+      ) || voices.find((v) => v.name.toLowerCase().includes(hint.toLowerCase()));
+      if (match) {
+        selectedVoice = match;
+        break;
+      }
     }
 
-    // 2. Otherwise match gender and Australian/English locale
+    // 2. Try Australian natural voice first
     if (!selectedVoice) {
+      const auVoices = voices.filter(
+        (v) => v.lang.includes('en-AU') || v.lang.includes('en_AU') || v.name.includes('Australia')
+      );
+      if (auVoices.length > 0) {
+        if (isMale) {
+          selectedVoice =
+            auVoices.find((v) => isNatural(v) && /male|russell|lee|david|oliver/i.test(v.name)) ||
+            auVoices.find((v) => /male|russell|lee|david/i.test(v.name)) ||
+            auVoices[0];
+        } else {
+          selectedVoice =
+            auVoices.find((v) => isNatural(v) && /female|karen|catherine|samantha|nicole/i.test(v.name)) ||
+            auVoices.find((v) => /female|karen|catherine/i.test(v.name)) ||
+            auVoices[0];
+        }
+      }
+    }
+
+    // 3. Otherwise match natural English voice by gender
+    if (!selectedVoice) {
+      const englishVoices = voices.filter((v) => v.lang.startsWith('en'));
       if (isMale) {
         selectedVoice =
-          voices.find(
-            (v) =>
-              (v.lang.includes('en-AU') || v.lang.includes('en-GB') || v.lang.includes('en-US')) &&
-              (v.name.toLowerCase().includes('male') ||
-                v.name.toLowerCase().includes('david') ||
-                v.name.toLowerCase().includes('george') ||
-                v.name.toLowerCase().includes('james'))
-          ) ||
-          voices.find((v) => v.lang.includes('en-AU')) ||
-          voices[0];
+          englishVoices.find((v) => isNatural(v) && /male|george|david|james|daniel|ryan|guy/i.test(v.name)) ||
+          englishVoices.find((v) => /male|george|david|james|daniel/i.test(v.name)) ||
+          englishVoices[0];
       } else {
         selectedVoice =
-          voices.find(
-            (v) =>
-              (v.lang.includes('en-AU') || v.lang.includes('en-GB') || v.lang.includes('en-US')) &&
-              (v.name.toLowerCase().includes('female') ||
-                v.name.toLowerCase().includes('karen') ||
-                v.name.toLowerCase().includes('catherine') ||
-                v.name.toLowerCase().includes('samantha'))
-          ) ||
-          voices.find((v) => v.lang.includes('en-AU')) ||
-          voices[0];
+          englishVoices.find((v) => isNatural(v) && /female|karen|catherine|samantha|ava|jenny|victoria/i.test(v.name)) ||
+          englishVoices.find((v) => /female|karen|catherine|samantha/i.test(v.name)) ||
+          englishVoices[0];
       }
     }
 

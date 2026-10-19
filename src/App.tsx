@@ -42,7 +42,8 @@ import { InfoDropdown } from './components/InfoDropdown';
 import { DifficultyModal } from './components/DifficultyModal';
 import { RoadblockModal } from './components/RoadblockModal';
 import { GameVictoryModal } from './components/GameVictoryModal';
-import { Image as ImageIcon } from 'lucide-react';
+import { SettingsModal } from './components/SettingsModal';
+import { Image as ImageIcon, Settings, Shuffle } from 'lucide-react';
 import {
   Representative,
   getRandomRepresentative,
@@ -53,9 +54,11 @@ export default function App() {
   // Wallpaper state (randomized colorful blurred wallpaper)
   const [currentWallpaper, setCurrentWallpaper] = useState<Wallpaper>(() => getRandomWallpaper());
 
-  // Game & Dial state
+  // Game & Dial state - randomize reason so it's not always the same!
   const [dialedNumber, setDialedNumber] = useState<string>('132 850');
-  const [missionIndex, setMissionIndex] = useState<number>(0);
+  const [missionIndex, setMissionIndex] = useState<number>(() =>
+    Math.floor(Math.random() * MISSIONS.length)
+  );
   const [difficulty, setDifficulty] = useState<Difficulty>('NORMAL');
   const [callStatus, setCallStatus] = useState<CallStatus>('IDLE');
   const [currentMenuId, setCurrentMenuId] = useState<string>('MAIN_MENU');
@@ -67,9 +70,10 @@ export default function App() {
 
   // UI Drawer & Modal states
   const [showDifficultyModal, setShowDifficultyModal] = useState<boolean>(true);
+  const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [isDrawerOpen, setIsDrawerOpen] = useState<boolean>(false);
   const [roadblockType, setRoadblockType] = useState<
-    'LINE_DROPPED' | 'CLOCK_TAMPERED' | 'HOSTILE_CALLER' | null
+    'LINE_DROPPED' | 'CLOCK_TAMPERED' | 'HOSTILE_CALLER' | 'OFFENSIVE_ABUSE' | null
   >(null);
   const [showVictory, setShowVictory] = useState<boolean>(false);
 
@@ -77,6 +81,11 @@ export default function App() {
   const [currentDb, setCurrentDb] = useState<number>(0);
   const [currentZone, setCurrentZone] = useState<VolumeZone>('TOO_QUIET');
   const [isMicActive, setIsMicActive] = useState<boolean>(true);
+
+  // Screaming & Hostility Tracking (2-min timer, 10s immunity, max 6 warnings)
+  const [screamStrikes, setScreamStrikes] = useState<number>(0);
+  const [screamTimer, setScreamTimer] = useState<number>(0);
+  const [isScreamImmune, setIsScreamImmune] = useState<boolean>(false);
 
   // Timing & Telemetry
   const [callSeconds, setCallSeconds] = useState<number>(0);
@@ -99,6 +108,8 @@ export default function App() {
   const signalIntervalRef = useRef<number | null>(null);
   const ringCancelRef = useRef<(() => void) | null>(null);
   const lastDropCallSecondsRef = useRef<number>(-999);
+  const screamCooldownUntilRef = useRef<number>(0);
+  const lastQueueAnnouncementSecRef = useRef<number>(0);
 
   const activeMission: Mission = MISSIONS[missionIndex % MISSIONS.length];
 
@@ -240,12 +251,37 @@ export default function App() {
     };
   }, [callStatus, difficulty]);
 
+  // Countdown 2-minute calm timer every second
+  useEffect(() => {
+    if (screamTimer <= 0) return;
+    const interval = window.setInterval(() => {
+      setIsScreamImmune(Date.now() < screamCooldownUntilRef.current);
+      setScreamTimer((prev) => {
+        if (prev <= 1) {
+          setScreamStrikes(0);
+          addMessage('SYSTEM', 'Hostility strikes cleared: 2 minutes of calm dialogue maintained.');
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => window.clearInterval(interval);
+  }, [screamTimer]);
+
   // Cycle wallpaper
   const handleCycleWallpaper = () => {
     triggerHaptic('selection');
     const currentIndex = IOS_WALLPAPERS.findIndex((w) => w.id === currentWallpaper.id);
     const nextIndex = (currentIndex + 1) % IOS_WALLPAPERS.length;
     setCurrentWallpaper(IOS_WALLPAPERS[nextIndex]);
+  };
+
+  // Shuffle mission reason so it's not always the same!
+  const handleShuffleMission = () => {
+    triggerHaptic('selection');
+    setMissionIndex((prev) => (prev + 1) % MISSIONS.length);
+    const nextM = MISSIONS[(missionIndex + 1) % MISSIONS.length];
+    addMessage('SYSTEM', `Calling reason switched to: "${nextM.title}"`);
   };
 
   // Drag-and-drop listener to easily drop an MP3 into the browser
@@ -308,6 +344,16 @@ export default function App() {
   // Start call with audio unlock and guaranteed connection
   const handleDial = () => {
     triggerHaptic('heavy');
+
+    // Pick a fresh random mission reason and fresh representative on every call!
+    setMissionIndex(Math.floor(Math.random() * MISSIONS.length));
+    setCurrentRepresentative(getRandomRepresentative());
+
+    // Reset hostility strikes and cooldowns
+    setScreamStrikes(0);
+    setScreamTimer(0);
+    screamCooldownUntilRef.current = 0;
+    lastQueueAnnouncementSecRef.current = 0;
 
     // Unlock Web Audio & SpeechSynthesis immediately on user click gesture
     const ctx = getAudioContext();
@@ -372,6 +418,24 @@ export default function App() {
           'SYSTEM',
           'SECURITY ALERT: System clock discrepancy detected. In accordance with Centrelink integrity rules, you have been pushed back 45 spots in the queue.'
         );
+      }
+
+      // Every 120 seconds in hold queue, remind caller what number they are in queue!
+      if (callStatusRef.current === 'HOLD_QUEUE') {
+        const currentSec = callSecondsRef.current + 1;
+        if (
+          currentSec >= 120 &&
+          currentSec - lastQueueAnnouncementSecRef.current >= 120
+        ) {
+          lastQueueAnnouncementSecRef.current = currentSec;
+          const pos = queuePosRef.current;
+          const announcement = `Thank you for holding. You are currently number ${pos} in the national queue. All customer service officers are assisting other callers. Please remain on the line.`;
+          addMessage('ROBOCALLER', `[QUEUE ANNOUNCEMENT] You are number ${pos} in the queue.`);
+          holdMusic.setDucked(true);
+          speechEngine.speakRobocaller(announcement, () => {
+            holdMusic.setDucked(false);
+          });
+        }
       }
     }, 1000);
   };
@@ -485,36 +549,142 @@ export default function App() {
     const currentStatus = callStatusRef.current;
     if (currentStatus !== 'ROBOCALLER_IVR' && currentStatus !== 'AGENT_TALKING') return;
 
-    addMessage('USER', result.transcript, result.peakDb);
+    const transcript = result.transcript.trim();
+    const textLower = transcript.toLowerCase();
+    addMessage('USER', transcript, result.peakDb);
 
-    // Hostile screaming penalty (> 82 dB)
-    if (result.peakDb >= 82) {
+    // 1. Severe Offensive & Abusive Keywords Check -> Immediate Call Termination
+    const OFFENSIVE_KEYWORDS = [
+      'cunt',
+      'fuck off',
+      'fuck you',
+      'kill yourself',
+      'die in a fire',
+      'bomb your office',
+      'slit your throat',
+      'shoot you',
+      'murder you',
+    ];
+
+    const isOffensive = OFFENSIVE_KEYWORDS.some((kw) => textLower.includes(kw));
+    if (isOffensive) {
       triggerHaptic('error');
-      setRoadblockType('HOSTILE_CALLER');
-      setQueuePos((p) => p + 25);
-      setReverseJumps((j) => j + 1);
-      const penaltyMsg =
-        'We do not tolerate abusive or aggressive language towards our staff or automated systems. Your call has been returned to the general automated menu.';
-      addMessage('ROBOCALLER', penaltyMsg);
-      speechEngine.speakRobocaller(penaltyMsg, () => {
-        enterRobocaller('MAIN_MENU');
-      });
+      holdMusic.stop();
+      playDisconnectTone(2000);
+      setCallStatus('CALL_ENDED');
+      setRoadblockType('OFFENSIVE_ABUSE');
+      addMessage('SYSTEM', 'CALL TERMINATED: Severe verbal abuse or explicit threats detected.');
+      speechEngine.speakRobocaller(
+        'This call is being terminated immediately under Commonwealth workplace anti-harassment policy. Goodbye.'
+      );
       return;
     }
 
+    // 2. Screaming & Hostility (> 82 dB) with 10-Second Immunity Delay & 2-Minute Reset
+    if (result.peakDb >= 82) {
+      // Check if within 10-second delay immunity (prevents logging the same scream multiple times)
+      if (Date.now() < screamCooldownUntilRef.current) {
+        return;
+      }
+
+      // Start 10-second immunity delay
+      screamCooldownUntilRef.current = Date.now() + 10000;
+      setIsScreamImmune(true);
+      setTimeout(() => setIsScreamImmune(false), 10000);
+
+      const newStrikes = screamStrikes + 1;
+      setScreamStrikes(newStrikes);
+      setScreamTimer(120); // Reset the 2-minute calm-down countdown
+      triggerHaptic('error');
+
+      if (newStrikes >= 6) {
+        // Exceeded 6 strikes within 2 minutes: boot caller!
+        setScreamStrikes(0);
+        setScreamTimer(0);
+        setRoadblockType('HOSTILE_CALLER');
+
+        if (callStatus === 'AGENT_TALKING') {
+          const rep = currentRepresentative;
+          const kickMsg = `Right, that is your sixth warning. I have no tolerance for continuous shouting. I am returning your call to the general queue.`;
+          addMessage('AGENT', kickMsg);
+          speechEngine.speakRepresentative(kickMsg, { gender: rep.gender }, () => {
+            enterHoldQueue('Placed back on hold after 6 hostility warnings...');
+          });
+        } else {
+          const kickMsg = `Automated noise threshold exceeded 6 times. Your call has been returned to the start of the general menu.`;
+          addMessage('ROBOCALLER', kickMsg);
+          speechEngine.speakRobocaller(kickMsg, () => {
+            enterRobocaller('MAIN_MENU');
+          });
+        }
+        return;
+      }
+
+      // Below 6 strikes: representative or robocaller attempts to de-escalate and calm user down!
+      if (callStatus === 'AGENT_TALKING') {
+        const rep = currentRepresentative;
+        const calmingMsg =
+          rep.hostileResponses?.[newStrikes % rep.hostileResponses.length] ||
+          `Whoa mate, steady on! Take a deep breath, no need to shout at me. I'm trying to help you sort this out.`;
+        addMessage('AGENT', calmingMsg);
+        speechEngine.speakRepresentative(
+          calmingMsg,
+          {
+            gender: rep.gender,
+            rate: rep.rate,
+            pitch: rep.pitch,
+            voiceHints: rep.voiceHints,
+          },
+          () => {
+            if (isMicActive) micAnalyzer.startListening();
+          }
+        );
+      } else {
+        const warningMsg = `High volume detected. Warning ${newStrikes} of 6. Please speak in a moderate conversational tone while our automated system processes your enquiry.`;
+        addMessage('ROBOCALLER', warningMsg);
+        speechEngine.speakRobocaller(warningMsg, () => {
+          if (isMicActive) micAnalyzer.startListening();
+        });
+      }
+      return;
+    }
+
+    // 3. Robocaller IVR Processing with Strict Keyword Validation
     if (callStatus === 'ROBOCALLER_IVR') {
+      const ivrValidKeywords = [
+        'jobseeker', 'breach', 'payment', 'pension', 'concession',
+        'report', 'income', 'debt', 'dispute', 'operator',
+        'representative', 'officer', 'agent', 'human', 'help',
+        'medical', 'certificate', 'doctor', 'suspended', 'demerit',
+        'obligation', 'appointment', 'transfer', 'one', 'two', 'three', 'four', 'zero',
+        'provider', 'centrelink', 'claim', 'exemption', 'attend', 'carer', 'dsp', 'disability', 'rent', 'austudy'
+      ];
+      const hasIvrKeyword = ivrValidKeywords.some((kw) => textLower.includes(kw));
+
+      // If caller made random noises, grunts, or spoke unrelated gibberish: DO NOT ADVANCE!
+      if (!hasIvrKeyword || textLower.length < 3) {
+        const notUnderstoodMsg = `We did not recognize that response. To dispute a payment or speak to an officer, please say "transfer to officer" or press 1 on your keypad.`;
+        addMessage('ROBOCALLER', notUnderstoodMsg);
+        speechEngine.speakRobocaller(notUnderstoodMsg, () => {
+          if (isMicActive) micAnalyzer.startListening();
+        });
+        return;
+      }
+
       const isUrgent = result.peakDb >= 56 && result.peakDb < 82;
 
+      // Try server API first
       try {
         const res = await fetch('/api/call/ivr', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            speechText: result.transcript,
+            speechText: transcript,
             volumeDb: result.peakDb,
             currentMenu: currentMenuId,
             promptTask: activeMission.title,
             difficulty,
+            screamStrikes,
           }),
         });
 
@@ -534,10 +704,41 @@ export default function App() {
           return;
         }
       } catch {
-        // client fallback
+        // try client-side Gemini fallback for static GitHub Pages
+        const clientRes = await generateClientIVR({
+          speechText: transcript,
+          volumeDb: result.peakDb,
+          currentMenu: currentMenuId,
+          promptTask: activeMission.title,
+          difficulty,
+        });
+
+        if (clientRes) {
+          addMessage('ROBOCALLER', clientRes.robocallerResponseText);
+          speechEngine.speakRobocaller(clientRes.robocallerResponseText, () => {
+            if (clientRes.action === 'TRANSFER_QUEUE') {
+              enterHoldQueue();
+            } else if (clientRes.action === 'KICK_TO_BACK') {
+              setQueuePos((p) => p + (clientRes.callerDelta || 10));
+              enterRobocaller('MAIN_MENU');
+            } else if (isMicActive) {
+              micAnalyzer.startListening();
+            }
+          });
+          return;
+        }
       }
 
-      if (isUrgent) {
+      // Offline programmatic IVR fallback
+      if (
+        isUrgent ||
+        textLower.includes('transfer') ||
+        textLower.includes('officer') ||
+        textLower.includes('representative') ||
+        textLower.includes('human') ||
+        textLower.includes('dispute') ||
+        textLower.includes('operator')
+      ) {
         const transferMsg =
           'It sounds like you are experiencing difficulty with our automated menu. Please hold while we transfer your call to the queue for a customer service representative.';
         addMessage('ROBOCALLER', transferMsg);
@@ -554,6 +755,7 @@ export default function App() {
         });
       }
     } else if (callStatus === 'AGENT_TALKING') {
+      // 4. Human Representative Dialogue with Mission Keyword Verification
       const rep = currentRepresentative;
       const voiceOpts = {
         gender: rep.gender,
@@ -562,18 +764,33 @@ export default function App() {
         voiceHints: rep.voiceHints,
       };
 
+      const matchedPhrase = activeMission.keyPhrases.some((phrase) =>
+        textLower.includes(phrase.toLowerCase())
+      );
+
+      const generalRelevantKeywords = [
+        'medical', 'doctor', 'certificate', 'pdf', 'scanner', 'fingerprint',
+        'attended', 'casual', 'earnings', 'bar', 'cousin', 'dubbo', 'unlink',
+        'austudy', 'study load', 'carer', 'mother', 'review', 'dsp', 'disability',
+        'points', 'impairment', 'rent', 'lease', 'periodic', 'mygov', 'exemption',
+        'appointment', 'breach', 'hours', 'separation', 'compliance'
+      ];
+      const hasRelevantTopic = matchedPhrase || generalRelevantKeywords.some((kw) => textLower.includes(kw));
+
+      // Try server API first
       try {
         const res = await fetch('/api/call/agent', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            speechText: result.transcript,
+            speechText: transcript,
             volumeDb: result.peakDb,
             activeMission,
             representative: rep,
             dialogueHistory: messages.slice(-4),
             holdTimeSeconds: callSeconds,
             difficulty,
+            screamStrikes,
           }),
         });
 
@@ -597,12 +814,13 @@ export default function App() {
       } catch {
         // try client-side Gemini fallback for static GitHub Pages
         const clientRes = await generateClientAgent({
-          speechText: result.transcript,
+          speechText: transcript,
           volumeDb: result.peakDb,
           activeMission,
           representative: rep,
           holdTimeSeconds: callSeconds,
           difficulty,
+          screamStrikes,
         });
 
         if (clientRes) {
@@ -623,11 +841,21 @@ export default function App() {
         }
       }
 
-      // Offline programmatic fallback using the representative's authentic voice
-      const matchedPhrase = activeMission.keyPhrases.some((phrase) =>
-        result.transcript.toLowerCase().includes(phrase.toLowerCase())
-      );
+      // Offline programmatic keyword checking:
+      // If user made random noise or mumbled gibberish without keywords, do NOT approve!
+      if (!hasRelevantTopic || textLower.length < 4) {
+        const confusionMsg =
+          rep.gender === 'male'
+            ? `Mate, that didn't make a lick of sense. Speak up clearly—what's the actual story with your documentation or provider?`
+            : `I'm sorry, I could not understand that. Please state clearly the reason for your compliance dispute so I can check your file.`;
+        addMessage('AGENT', confusionMsg);
+        speechEngine.speakRepresentative(confusionMsg, voiceOpts, () => {
+          if (isMicActive) micAnalyzer.startListening();
+        });
+        return;
+      }
 
+      // If user articulated key mission phrases with firm volume (50-81 dB): APPROVE!
       if (matchedPhrase && result.peakDb >= 50 && result.peakDb <= 81) {
         const winMsg =
           rep.approvalResponses[Math.floor(Math.random() * rep.approvalResponses.length)];
@@ -780,17 +1008,33 @@ export default function App() {
           {currentTimeStr}
         </div>
 
-        {/* Right: Battery + Wallpaper Switcher */}
-        <div className="flex items-center gap-2">
+        {/* Right: Battery + Controls (Shuffle Reason, Wallpaper, Settings) */}
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={handleShuffleMission}
+            className="p-1 text-white/75 hover:text-white transition cursor-pointer"
+            title="Switch reason for calling Centrelink"
+          >
+            <Shuffle className="w-3.5 h-3.5" />
+          </button>
           <button
             type="button"
             onClick={handleCycleWallpaper}
-            className="p-1 text-white/70 hover:text-white transition cursor-pointer"
+            className="p-1 text-white/75 hover:text-white transition cursor-pointer"
             title={`Wallpaper: ${currentWallpaper.name} (Click to switch)`}
           >
             <ImageIcon className="w-3.5 h-3.5" />
           </button>
-          <div className="flex items-center gap-1 font-mono text-[11px]">
+          <button
+            type="button"
+            onClick={() => setShowSettingsModal(true)}
+            className="p-1 text-white/75 hover:text-white transition cursor-pointer"
+            title="Settings (Gemini API Key & Hold Music)"
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
+          <div className="flex items-center gap-1 font-mono text-[11px] ml-1">
             <span>78%</span>
             <div className="w-5 h-2.5 rounded-xs border border-white/80 p-0.5 flex items-center">
               <div className="h-full w-3.5 bg-white rounded-2xs" />
@@ -823,6 +1067,9 @@ export default function App() {
             messages={messages}
             currentMenuPrompt={currentMenuPrompt}
             agentName={currentRepresentative.name}
+            screamStrikes={screamStrikes}
+            screamTimer={screamTimer}
+            isScreamImmune={isScreamImmune}
             onHangUp={handleHangUp}
             onKeypadPress={handleKeypadPress}
             onToggleMic={handleToggleMic}
@@ -854,6 +1101,12 @@ export default function App() {
           onConfirm={() => setShowDifficultyModal(false)}
         />
       )}
+
+      {/* Settings & Privacy Modal */}
+      <SettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+      />
 
       {/* Roadblock Modals */}
       {roadblockType && (

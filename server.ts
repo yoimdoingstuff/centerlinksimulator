@@ -28,25 +28,77 @@ if (apiKey && apiKey !== 'MY_GEMINI_API_KEY') {
   });
 }
 
+// Offensive abusive keywords that trigger immediate disconnection
+const OFFENSIVE_KEYWORDS = [
+  'cunt',
+  'fuck off',
+  'fuck you',
+  'kill yourself',
+  'die in a fire',
+  'bomb your office',
+  'slit your throat',
+  'shoot you',
+  'murder you',
+];
+
+const IVR_VALID_KEYWORDS = [
+  'jobseeker', 'breach', 'payment', 'pension', 'concession',
+  'report', 'income', 'debt', 'dispute', 'operator',
+  'representative', 'officer', 'agent', 'human', 'help',
+  'medical', 'certificate', 'doctor', 'suspended', 'demerit',
+  'obligation', 'appointment', 'transfer', 'one', 'two', 'three', 'four', 'zero',
+  'provider', 'centrelink', 'claim', 'exemption', 'attend'
+];
+
 // Robocaller IVR dialogue endpoint
 app.post('/api/call/ivr', async (req, res) => {
-  const { speechText, volumeDb, currentMenu, promptTask, difficulty } = req.body;
+  const { speechText, volumeDb, currentMenu, promptTask, difficulty, screamStrikes } = req.body;
+  const textLower = (speechText || '').toLowerCase().trim();
 
-  // If screaming too loud (> 82 dB)
-  if (volumeDb >= 82) {
+  // Check for severe offensive keywords
+  const isOffensive = OFFENSIVE_KEYWORDS.some((kw) => textLower.includes(kw));
+  if (isOffensive) {
     return res.json({
-      robocallerResponseText: "Warning: We do not tolerate aggressive or abusive behavior towards our automated systems. Your call has been returned to the start of the general enquiry queue.",
-      action: 'KICK_TO_BACK',
-      callerDelta: difficulty === 'REALISTIC' ? 35 : difficulty === 'NORMAL' ? 12 : 5,
-      nextMenu: 'MAIN_MENU',
-      isRobotic: true
+      robocallerResponseText: "This call is being terminated immediately under Commonwealth workplace anti-harassment policy. Goodbye.",
+      action: 'TERMINATE_CALL',
+      callerDelta: 0,
+      nextMenu: 'TERMINATED',
+      isRobotic: true,
+      terminate: true
     });
   }
 
-  // If too quiet / whisper (< 30 dB)
-  if (volumeDb < 30 || !speechText || speechText.trim().length === 0) {
+  // Screaming check (> 82 dB)
+  if (volumeDb >= 82) {
+    const strikes = (screamStrikes || 0) + 1;
+    if (strikes >= 6) {
+      return res.json({
+        robocallerResponseText: "Automated noise threshold exceeded 6 times. Your call has been returned to the start of the general menu.",
+        action: 'KICK_TO_BACK',
+        callerDelta: 20,
+        nextMenu: 'MAIN_MENU',
+        isRobotic: true,
+        screamStrikes: strikes,
+      });
+    }
+
     return res.json({
-      robocallerResponseText: "Sorry, we didn't quite catch that. Please speak clearly after the tone, or use your telephone keypad to select an option.",
+      robocallerResponseText: `Elevated volume detected. Warning ${strikes} of 6. Please speak in a moderate conversational tone while our automated system processes your input.`,
+      action: 'CALM_WARNING',
+      callerDelta: 0,
+      nextMenu: currentMenu || 'MAIN_MENU',
+      isRobotic: true,
+      screamStrikes: strikes,
+    });
+  }
+
+  // Check if speech matches valid Centrelink IVR keywords
+  const hasValidKeyword = IVR_VALID_KEYWORDS.some((kw) => textLower.includes(kw));
+
+  // If too quiet / whisper (< 30 dB) or random non-keyword noise
+  if (volumeDb < 30 || textLower.length < 3 || (!hasValidKeyword && textLower.length < 15)) {
+    return res.json({
+      robocallerResponseText: "Sorry, we could not understand that response. Please speak clearly, or use your keypad to choose from the menu options.",
       action: 'RETRY',
       callerDelta: 0,
       nextMenu: currentMenu || 'MAIN_MENU',
@@ -66,18 +118,18 @@ The caller is trying to solve this task: "${promptTask || 'Dispute Mutual Obliga
 Current Menu: "${currentMenu}".
 Caller said: "${speechText}".
 Caller loudness decibels: ${volumeDb} dB. (Normal is 40-55 dB, Firm/Frustrated is 58-80 dB).
-Is caller firm & assertive: ${isFirmAndAssertive ? 'YES (they are raising their voice/sounding frustrated)' : 'NO (they are speaking casually/softly)'}.
+Is caller firm & assertive: ${isFirmAndAssertive ? 'YES' : 'NO'}.
 Difficulty mode: ${difficulty}.
 
 Bureaucratic Behavior Rules:
-1. You are a frustrating automated voice IVR. You speak in concise, unhelpful, bureaucratic Australian government phone prompts.
-2. If the caller spoke casually (not firm/assertive), you often misunderstand them hilariously or try to force them to use the myGov website or loop them back to the menu.
-3. If the caller is FIRM & ASSERTIVE (${volumeDb} dB, frustrated/urgent), your automated system detects high emotional distress and triggers an escalation clause: "Transferring you to the queue for a customer service officer."
+1. Speak in concise, unhelpful, robotic Australian government phone prompts under 35 words.
+2. If caller speech is random gibberish or does NOT relate to Centrelink services, do NOT transfer them! Say you did not recognize that command and repeat the keypad options.
+3. If the caller states a genuine Centrelink issue ("jobseeker", "breach", "dispute", "transfer", "representative") with firm urgency, trigger: "Transferring you to the queue for a customer service officer."
 4. Format output strictly as JSON with keys:
-- "responseText": String spoken by the IVR (keep it under 40 words, very robotic and bureaucratic).
-- "action": One of "TRANSFER_QUEUE" (if transferred to human hold queue), "MENU_LOOP" (if looping), "MISUNDERSTOOD" (if pretending to hear wrong words), or "MENU_NAV".
-- "nextMenu": Next menu name.
-- "queuePenalty": Integer (0 if normal, positive if penalized, negative if moved forward).`,
+- "responseText": String
+- "action": "TRANSFER_QUEUE" | "MENU_LOOP" | "MISUNDERSTOOD"
+- "nextMenu": Next menu name
+- "queuePenalty": Integer`,
         config: {
           responseMimeType: 'application/json',
         },
@@ -86,7 +138,7 @@ Bureaucratic Behavior Rules:
       const parsed = JSON.parse(response.text || '{}');
       return res.json({
         robocallerResponseText: parsed.responseText || "Please listen carefully as our menu options have recently changed. For JobSeeker, press 1.",
-        action: parsed.action || (isFirmAndAssertive ? 'TRANSFER_QUEUE' : 'MENU_LOOP'),
+        action: parsed.action || (isFirmAndAssertive && hasValidKeyword ? 'TRANSFER_QUEUE' : 'MENU_LOOP'),
         callerDelta: parsed.queuePenalty || 0,
         nextMenu: parsed.nextMenu || 'MAIN_MENU',
         isRobotic: true
@@ -97,7 +149,7 @@ Bureaucratic Behavior Rules:
   }
 
   // Fallback programmatic logic
-  if (isFirmAndAssertive) {
+  if (isFirmAndAssertive && hasValidKeyword) {
     return res.json({
       robocallerResponseText: "It sounds like you are experiencing difficulty with our automated menu. Please hold while we transfer your call to the queue for a customer service representative.",
       action: 'TRANSFER_QUEUE',
@@ -139,14 +191,46 @@ app.post('/api/call/agent', async (req, res) => {
   const repName = representative?.name || 'Sharon';
   const repHeritage = representative?.heritage || 'Australian public service veteran';
   const repTitle = representative?.title || 'Senior Customer Service Officer';
+  const textLower = (speechText || '').toLowerCase().trim();
+  const strikes = (req.body.screamStrikes || 0);
 
-  // Screaming check at the human rep
-  if (volumeDb >= 84) {
+  // Check for severe offensive keywords
+  const isOffensive = OFFENSIVE_KEYWORDS.some((kw) => textLower.includes(kw));
+  if (isOffensive) {
     return res.json({
-      agentResponseText: `Sir/Ma'am, this is ${repName}. I understand you are frustrated, but if you continue to shout I will have to terminate this call. I am placing you back on hold while I speak with my team leader.`,
-      agentState: 'PUT_ON_HOLD_AGAIN',
+      agentResponseText: `Under Commonwealth workplace anti-harassment policy, I am terminating this call immediately. Goodbye.`,
+      agentState: 'CALL_TERMINATED',
       mood: 'OFFENDED',
       approved: false,
+      terminate: true
+    });
+  }
+
+  // Screaming check at the human rep (> 82 dB)
+  if (volumeDb >= 82) {
+    const newStrikes = strikes + 1;
+    if (newStrikes >= 6) {
+      return res.json({
+        agentResponseText: `Right, that is your sixth warning. I have no tolerance for continuous shouting. I am placing you back into the general queue.`,
+        agentState: 'PUT_ON_HOLD_AGAIN',
+        mood: 'OFFENDED',
+        approved: false,
+        screamStrikes: newStrikes
+      });
+    }
+
+    // Calming response
+    const calmingLines = [
+      `Whoa, please lower your voice. I understand this is frustrating, but shouting won't get your payment cleared. Let's take a breath.`,
+      `Sir/Ma'am, please do not shout. I am trying to help you, but you need to speak at a normal volume so I can type your details.`,
+      `Please calm down. Take a moment, catch your breath, and tell me clearly what happened with your appointment.`
+    ];
+    return res.json({
+      agentResponseText: calmingLines[Math.floor(Math.random() * calmingLines.length)],
+      agentState: 'CALMING_DOWN',
+      mood: 'ANNOYED',
+      approved: false,
+      screamStrikes: newStrikes
     });
   }
 

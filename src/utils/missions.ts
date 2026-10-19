@@ -8,8 +8,8 @@ export const MISSIONS: Mission[] = [
     agency: 'Services Australia — JobSeeker Compliance',
     targetDepartment: 'JobSeeker & Mutual Obligations',
     penaltyNotice: 'PAYMENT SUSPENDED: Doctor medical certificate uploaded as PDF instead of physical paper scan.',
-    description: 'Tell the agent: "My doctor medical certificate was submitted as a PDF instead of a TIFF scan. Please lift the suspension."',
-    keyPhrases: ['medical certificate', 'doctor', 'PDF', 'exemption'],
+    description: 'Tell the agent: "My doctor medical certificate was submitted as a PDF instead of a paper scan. Please lift the suspension."',
+    keyPhrases: ['medical certificate', 'doctor', 'pdf', 'exemption', 'sick', 'hospital'],
   },
   {
     id: 'duplicate_abn_income',
@@ -19,7 +19,7 @@ export const MISSIONS: Mission[] = [
     targetDepartment: 'Income Reporting & Employment Separation',
     penaltyNotice: 'INCOME MISMATCH: Casual bar earnings flagged as redundant company ABN.',
     description: 'Tell the agent: "I worked casual bar shifts earning $412, but an old company ABN flagged it as a mismatch."',
-    keyPhrases: ['casual earnings', 'bar shift', '412', 'ABN mismatch'],
+    keyPhrases: ['casual earnings', 'bar shift', '412', 'abn mismatch', 'casual', 'hours', 'earnings'],
   },
   {
     id: 'crn_identity_mixup',
@@ -29,7 +29,7 @@ export const MISSIONS: Mission[] = [
     targetDepartment: 'Identity & Concession Relink',
     penaltyNotice: 'DUPLICATE RECORD: Account merged with second cousin in regional NSW.',
     description: 'Tell the agent: "My CRN was accidentally merged with my cousin in Dubbo and sent to his bank account."',
-    keyPhrases: ['cousin', 'Dubbo', 'wrong account', 'unlink'],
+    keyPhrases: ['cousin', 'dubbo', 'wrong account', 'unlink', 'merged', 'bank'],
   },
   {
     id: 'workforce_biometric_outage',
@@ -39,7 +39,47 @@ export const MISSIONS: Mission[] = [
     targetDepartment: 'Provider Disputes & Demerit Appeals',
     penaltyNotice: 'DEMERIT POINT ISSUED: Recorded absent because provider scanner was offline.',
     description: 'Tell the agent: "I attended my compulsory interview on time, but the provider fingerprint scanner was offline."',
-    keyPhrases: ['attended', 'scanner was down', 'demerit', 'fingerprint'],
+    keyPhrases: ['attended', 'scanner was down', 'demerit', 'fingerprint', 'interview', 'on time', 'offline'],
+  },
+  {
+    id: 'austudy_courseload_glitch',
+    title: 'Appeal 74.9% Austudy Study Load Suspension',
+    crn: '832 195 440E',
+    agency: 'Services Australia — Higher Education & Austudy',
+    targetDepartment: 'Student Payments & Study Load Assessment',
+    penaltyNotice: 'PAYMENT CUT: University course recorded as 3 subjects (74.9% full-time load).',
+    description: 'Tell the agent: "My university course is 75% full-time credit points, the electronic enrolment system had a rounding glitch."',
+    keyPhrases: ['austudy', 'study load', 'university', 'full time', 'credit points', 'subjects', 'student'],
+  },
+  {
+    id: 'carers_allowance_lost_mail',
+    title: 'Restore Carer Allowance After Lost Review Form',
+    crn: '614 782 309F',
+    agency: 'Services Australia — Carer Support Services',
+    targetDepartment: 'Carer Payment & Medical Reviews',
+    penaltyNotice: 'BENEFIT CANCELLED: Treating doctor verification questionnaire not received.',
+    description: 'Tell the agent: "My mother\'s treating specialist mailed the completed SA332 form three weeks ago via Australia Post."',
+    keyPhrases: ['carer', 'doctor form', 'mailed', 'australia post', 'treating doctor', 'mother', 'review'],
+  },
+  {
+    id: 'dsp_impairment_table_dispute',
+    title: 'Dispute Disability Support Pension Impairment Score',
+    crn: '159 347 882G',
+    agency: 'Services Australia — DSP Assessment Team',
+    targetDepartment: 'Disability Medical Assessment & Appeals',
+    penaltyNotice: 'CLAIM REJECTED: Assigned 15 points under Table 2 instead of 20 points under Table 1.',
+    description: 'Tell the agent: "My orthopaedic surgeon specialist report confirms severe permanent impairment of 20 points under Table 1."',
+    keyPhrases: ['dsp', 'disability', 'impairment', 'table', 'points', 'specialist', 'permanent'],
+  },
+  {
+    id: 'rent_assistance_lease_rollover',
+    title: 'Reinstate Rent Assistance on Periodic Lease',
+    crn: '903 416 528H',
+    agency: 'Services Australia — Accommodation Support',
+    targetDepartment: 'Rent Assistance & Tenancy Verification',
+    penaltyNotice: 'RENT ASSISTANCE STOPPED: 12-month fixed tenancy agreement expired.',
+    description: 'Tell the agent: "My tenancy rolled over onto a continuing periodic month-to-month lease as permitted by state residential tenancies law."',
+    keyPhrases: ['rent assistance', 'lease', 'periodic', 'month to month', 'landlord', 'tenancy', 'rent'],
   },
 ];
 
@@ -77,32 +117,37 @@ export const IVR_MENUS: Record<string, IVRMenu> = {
       { key: '9', label: 'Main Menu', voicePhrase: 'main menu', action: 'SUBMENU', targetMenu: 'MAIN_MENU' },
     ],
   },
+  PENSION_MENU: {
+    id: 'PENSION_MENU',
+    spokenPrompt:
+      'Age Pension and Carer Support. For urgent carer reviews or medical certification appeals, press 1. To request an income and assets schedule, press 2. To speak to an officer, press 0.',
+    options: [
+      { key: '1', label: 'Carer Review & Appeals', voicePhrase: 'carer', action: 'SUBMENU', targetMenu: 'DISPUTE_MENU' },
+      { key: '2', label: 'Assets Schedule', voicePhrase: 'assets', action: 'LOOP' },
+      { key: '0', label: 'Hold for Officer', voicePhrase: 'officer', action: 'HOLD_QUEUE' },
+      { key: '9', label: 'Main Menu', voicePhrase: 'main menu', action: 'SUBMENU', targetMenu: 'MAIN_MENU' },
+    ],
+  },
   CONCESSION_MENU: {
     id: 'CONCESSION_MENU',
     spokenPrompt:
-      'Concession and Health Care Cards. All operators are currently busy. Did you know you can view your digital card in the Express Plus mobile app? To hold for an operator, press 1 or say "Operator".',
+      'Concession Cards and Rent Assistance. If your rent assistance has been reduced or cancelled, press 1. For concession card re-issue, press 2. Or say "Transfer me to an officer".',
     options: [
-      { key: '1', label: 'Hold for an Operator', voicePhrase: 'operator', action: 'HOLD_QUEUE' },
-      { key: '9', label: 'Main Menu', voicePhrase: 'back', action: 'SUBMENU', targetMenu: 'MAIN_MENU' },
+      { key: '1', label: 'Rent Assistance Dispute', voicePhrase: 'rent', action: 'SUBMENU', targetMenu: 'DISPUTE_MENU' },
+      { key: '2', label: 'Concession Card Re-issue', voicePhrase: 'card', action: 'LOOP' },
+      { key: '0', label: 'Hold for Officer', voicePhrase: 'officer', action: 'HOLD_QUEUE' },
+      { key: '9', label: 'Main Menu', voicePhrase: 'main menu', action: 'SUBMENU', targetMenu: 'MAIN_MENU' },
     ],
   },
   INCOME_DEBT_MENU: {
     id: 'INCOME_DEBT_MENU',
     spokenPrompt:
-      'Employment Income and Debt Resolution. If you are reporting earnings for the current fortnight, press 1. If you are calling regarding a discrepancy notice, press 2. To hold for a compliance representative, press 3.',
+      'Income Reporting and Overpayment Disputes. If you have been notified of an employment mismatch or casual earning discrepancy, press 1. To make a payment, press 2.',
     options: [
-      { key: '1', label: 'Report Fortnight Earnings', voicePhrase: 'earnings', action: 'LOOP' },
-      { key: '2', label: 'Discrepancy Notice', voicePhrase: 'discrepancy', action: 'HOLD_QUEUE' },
-      { key: '3', label: 'Hold for Representative', voicePhrase: 'representative', action: 'HOLD_QUEUE' },
+      { key: '1', label: 'Earnings Mismatch Dispute', voicePhrase: 'earnings', action: 'SUBMENU', targetMenu: 'DISPUTE_MENU' },
+      { key: '2', label: 'Make Payment', voicePhrase: 'pay', action: 'LOOP' },
+      { key: '0', label: 'Hold for Officer', voicePhrase: 'officer', action: 'HOLD_QUEUE' },
       { key: '9', label: 'Main Menu', voicePhrase: 'main menu', action: 'SUBMENU', targetMenu: 'MAIN_MENU' },
-    ],
-  },
-  PENSION_MENU: {
-    id: 'PENSION_MENU',
-    spokenPrompt:
-      'Pensions and Seniors Services. Current estimated wait time is higher than average. Please visit a service centre with your identity documents. Press 1 to return to the main menu.',
-    options: [
-      { key: '1', label: 'Return to Main Menu', voicePhrase: 'main menu', action: 'SUBMENU', targetMenu: 'MAIN_MENU' },
     ],
   },
 };

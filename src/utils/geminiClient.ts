@@ -2,14 +2,53 @@ import { GoogleGenAI } from '@google/genai';
 import { Representative } from './representatives';
 import { Mission } from '../types/game';
 
-const clientApiKey = import.meta.env.VITE_GEMINI_API_KEY;
+const STORAGE_KEY = 'centrelink_gemini_api_key';
+
+export function getStoredApiKey(): string {
+  try {
+    return localStorage.getItem(STORAGE_KEY) || import.meta.env.VITE_GEMINI_API_KEY || '';
+  } catch {
+    return import.meta.env.VITE_GEMINI_API_KEY || '';
+  }
+}
+
 let clientAi: GoogleGenAI | null = null;
 
-if (clientApiKey && clientApiKey !== 'MY_GEMINI_API_KEY') {
+function initClientAi() {
+  const key = getStoredApiKey();
+  if (key && key !== 'MY_GEMINI_API_KEY' && key.trim().length > 10) {
+    try {
+      clientAi = new GoogleGenAI({ apiKey: key.trim() });
+    } catch (err) {
+      console.warn('Client Gemini init error', err);
+      clientAi = null;
+    }
+  } else {
+    clientAi = null;
+  }
+}
+
+initClientAi();
+
+export function setStoredApiKey(key: string): void {
   try {
-    clientAi = new GoogleGenAI({ apiKey: clientApiKey });
+    if (key && key.trim()) {
+      localStorage.setItem(STORAGE_KEY, key.trim());
+    } else {
+      localStorage.removeItem(STORAGE_KEY);
+    }
+    initClientAi();
   } catch (err) {
-    console.warn('Client Gemini init error', err);
+    console.error('Error saving API key to localStorage', err);
+  }
+}
+
+export function clearStoredApiKey(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+    initClientAi();
+  } catch (err) {
+    console.error('Error clearing API key', err);
   }
 }
 
@@ -41,10 +80,11 @@ Current Menu: "${params.currentMenu}".
 Caller said: "${params.speechText}". Loudness: ${params.volumeDb} dB.
 Is firm & assertive: ${isFirm}. Difficulty: ${params.difficulty}.
 
-Rules:
-1. Robotic, frustrating bureaucratic Australian telephone prompt under 35 words.
-2. If firm/assertive, escalate: "Transferring you to the queue for a customer service officer."
-3. Format strictly as JSON with keys: "responseText", "action" ("TRANSFER_QUEUE" | "MENU_LOOP" | "MISUNDERSTOOD"), "queuePenalty" (number), "nextMenu".`,
+Strict Rules:
+1. Speak in a robotic, frustrating bureaucratic Australian telephone prompt under 35 words.
+2. If caller speech is gibberish, random sounds, coughing, or unrelated words, DO NOT advance! Respond that you did not catch that and ask them to select a valid option or press 1.
+3. If they say relevant keywords ("jobseeker", "breach", "payment", "dispute", "transfer", "officer", "representative", "demerit") with firm urgency (58-81 dB), transfer them: "Transferring you to the queue for a customer service officer."
+4. Format strictly as JSON with keys: "responseText", "action" ("TRANSFER_QUEUE" | "MENU_LOOP" | "MISUNDERSTOOD"), "queuePenalty" (number), "nextMenu".`,
       config: {
         responseMimeType: 'application/json',
       },
@@ -69,6 +109,7 @@ export async function generateClientAgent(params: {
   representative: Representative;
   holdTimeSeconds: number;
   difficulty: string;
+  screamStrikes?: number;
 }): Promise<{
   agentResponseText: string;
   approved: boolean;
@@ -81,17 +122,18 @@ export async function generateClientAgent(params: {
     const response = await clientAi.models.generateContent({
       model: 'gemini-3.8-flash',
       contents: `You are "${rep.name}", a Centrelink ${rep.title} in Australia.
-Heritage: ${rep.heritage}.
+Heritage & Tone: ${rep.heritage}.
 Player Mission: "${params.activeMission.title} - ${params.activeMission.description}".
-Required Key Concepts: "${params.activeMission.keyPhrases.join(', ')}".
+Required Key Mission Concepts: "${params.activeMission.keyPhrases.join(', ')}".
 Caller Loudness: ${params.volumeDb} dB.
 Caller said: "${params.speechText}".
-Hold time: ${params.holdTimeSeconds}s.
+Hold time endured: ${params.holdTimeSeconds}s.
+Current Scream Warning Strikes: ${params.screamStrikes || 0}/6.
 
-Rules:
-1. If caller explains clearly with firm urgency (55-80 dB) and mentions key facts, approve the claim!
-2. If too timid, stall or say you need to consult a manual.
-3. If they scream (> 82 dB), get defensive.
+Strict Assessment Rules:
+1. If caller makes random noises, mumbling, coughing, or says things with NO relation to the mission keywords, DO NOT approve! In character, ask them what on earth they mean and ask for their actual reason.
+2. If caller is screaming (> 82 dB), do NOT immediately hang up unless at strike 6; instead, try to calm them down in your distinct Australian personality.
+3. If caller explains with firm clarity (52-80 dB) and articulates the key facts of their dispute (e.g. medical cert, provider scanner down, casual earnings), APPROVE the claim and wipe the penalty!
 4. Keep response under 45 words in authentic Australian call centre colloquialisms.
 5. Format strictly as JSON with keys: "responseText", "approved" (boolean), "agentState" ("CONVERSING" | "CLAIM_APPROVED" | "PUT_ON_HOLD_AGAIN").`,
       config: {

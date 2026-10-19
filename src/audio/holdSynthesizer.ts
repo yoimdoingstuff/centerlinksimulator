@@ -93,6 +93,8 @@ class HoldMusicController {
         '/hold-music.mp3',
       ].filter(Boolean) as string[];
 
+      let didStartAudio = false;
+
       if (candidateUrls.length > 0) {
         const audioUrl = candidateUrls[0];
         const audio = new Audio(audioUrl);
@@ -101,24 +103,44 @@ class HoldMusicController {
           ? baseVol * holdMusicConfig.duckingMultiplier
           : baseVol;
 
+        const fallbackToSynth = () => {
+          if (!didStartAudio && this.isPlaying && !this.synthInterval) {
+            didStartAudio = false;
+            this.startSynthLoop();
+          }
+        };
+
         audio.oncanplay = () => {
           if (!this.isPlaying) return;
-          audio.play().catch(() => {});
+          // Check if file is valid audio with duration > 0 (avoid playing 0-byte empty files)
+          if (audio.duration && !isNaN(audio.duration) && audio.duration > 0.5) {
+            didStartAudio = true;
+            audio.play().catch(() => fallbackToSynth());
+          } else {
+            fallbackToSynth();
+          }
         };
 
         audio.onerror = () => {
-          // If mp3 is not found in public/ or failed, fallback immediately to authentic synth!
-          if (this.isPlaying && !this.synthInterval) {
-            this.startSynthLoop();
-          }
+          fallbackToSynth();
         };
 
-        this.audioElem = audio;
-        audio.play().catch(() => {
-          // In case of playback failure, start procedural synth
-          if (this.isPlaying && !this.synthInterval) {
-            this.startSynthLoop();
+        // Safety timeout: if audio doesn't start within 800ms (e.g. 0-byte or blocked file), fallback to procedural Opus No. 1
+        setTimeout(() => {
+          if (this.isPlaying && !didStartAudio && !this.synthInterval) {
+            fallbackToSynth();
           }
+        }, 800);
+
+        this.audioElem = audio;
+        audio.play().then(() => {
+          if (audio.duration && audio.duration > 0.5) {
+            didStartAudio = true;
+          } else {
+            fallbackToSynth();
+          }
+        }).catch(() => {
+          fallbackToSynth();
         });
       } else {
         this.startSynthLoop();
@@ -142,20 +164,29 @@ class HoldMusicController {
     }
   }
 
+  private isSpeakerBoost: boolean = false;
+
+  public setSpeakerBoost(enabled: boolean): void {
+    this.isSpeakerBoost = enabled;
+    if (!this.isPlaying) return;
+    this.setDucked(this.isDucked);
+  }
+
   public setDucked(ducked: boolean): void {
     this.isDucked = ducked;
     if (!this.isPlaying) return;
 
     try {
       const ctx = getAudioContext();
-      const baseVol = holdMusicConfig.defaultVolume;
+      const boostMultiplier = this.isSpeakerBoost ? 2.4 : 1.0;
+      const baseVol = Math.min(1.0, holdMusicConfig.defaultVolume * boostMultiplier);
       const targetGain = ducked ? baseVol * holdMusicConfig.duckingMultiplier : baseVol;
 
       if (this.masterGain) {
         this.masterGain.gain.linearRampToValueAtTime(targetGain, ctx.currentTime + 0.15);
       }
       if (this.audioElem) {
-        this.audioElem.volume = targetGain;
+        this.audioElem.volume = Math.min(1.0, targetGain);
       }
     } catch {
       // ignore
@@ -168,7 +199,7 @@ class HoldMusicController {
     }
 
     const playNextNote = () => {
-      if (!this.isPlaying || holdMusicConfig.audioFileUrl) return;
+      if (!this.isPlaying) return;
       try {
         const ctx = getAudioContext();
         const note = this.melody[this.currentNoteIndex];
