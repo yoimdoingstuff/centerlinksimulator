@@ -74,6 +74,110 @@ export function playDTMFTone(key: string, durationMs: number = 180): void {
   }
 }
 
+export function playLinePickupClick(): void {
+  try {
+    const ctx = getAudioContext();
+    const now = ctx.currentTime;
+
+    // Relay switch click
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(1400, now);
+    osc.frequency.exponentialRampToValueAtTime(120, now + 0.04);
+
+    gain.gain.setValueAtTime(0.2, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.045);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.05);
+
+    // Subtle line pickup static pop
+    playStaticBurst(60);
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Plays the full outgoing call dialing sequence:
+ * 1. Rapid DTMF touch-tone sequence for the dialed number
+ * 2. Australian dual-tone ringback cadence (400Hz + 450Hz)
+ * 3. Line pickup click & connection chime
+ * 4. Guaranteed callback into Centrelink
+ */
+export function playDialSequence(
+  numberToDial: string,
+  onConnect?: () => void
+): () => void {
+  let isCancelled = false;
+  let hasConnected = false;
+  const timeoutIds: number[] = [];
+  let stopCurrentTone: (() => void) | null = null;
+
+  const triggerConnect = () => {
+    if (isCancelled || hasConnected) return;
+    hasConnected = true;
+    playLinePickupClick();
+    playConnectionChime();
+    if (onConnect) onConnect();
+  };
+
+  try {
+    const ctx = getAudioContext();
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+
+    // 1. Play DTMF tones for each dialed digit
+    const cleanDigits = numberToDial.replace(/[^0-9*#]/g, '') || '132850';
+    const digits = cleanDigits.slice(0, 10).split('');
+
+    const toneDurationMs = 70;
+    const toneGapMs = 35;
+    let currentDelay = 50;
+
+    digits.forEach((digit) => {
+      const tid = window.setTimeout(() => {
+        if (isCancelled) return;
+        playDTMFTone(digit, toneDurationMs);
+      }, currentDelay);
+      timeoutIds.push(tid);
+      currentDelay += toneDurationMs + toneGapMs;
+    });
+
+    // 2. Play ringback tone after dialing completes (~700ms - 800ms)
+    currentDelay += 180;
+    const ringTid = window.setTimeout(() => {
+      if (isCancelled) return;
+      stopCurrentTone = playRingbackTone(() => {
+        triggerConnect();
+      });
+    }, currentDelay);
+    timeoutIds.push(ringTid);
+
+    // Safety fallback timer (~2.6 seconds max) to guarantee call connects even if audio fails
+    const safetyTimer = window.setTimeout(() => {
+      triggerConnect();
+    }, currentDelay + 1700);
+    timeoutIds.push(safetyTimer);
+
+    return () => {
+      isCancelled = true;
+      timeoutIds.forEach((id) => clearTimeout(id));
+      if (stopCurrentTone) stopCurrentTone();
+    };
+  } catch {
+    const fallbackTimer = window.setTimeout(triggerConnect, 1800);
+    return () => {
+      isCancelled = true;
+      clearTimeout(fallbackTimer);
+    };
+  }
+}
+
 export function playRingbackTone(onEnd?: () => void): () => void {
   let isCancelled = false;
   let hasFired = false;
@@ -84,11 +188,14 @@ export function playRingbackTone(onEnd?: () => void): () => void {
     if (onEnd) onEnd();
   };
 
-  // Ironclad timeout: transition after 2.2 seconds no matter what
-  const timer = setTimeout(fireEnd, 2200);
+  // Ring for 1.4 seconds then connect
+  const timer = window.setTimeout(fireEnd, 1400);
 
   try {
     const ctx = getAudioContext();
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
     const now = ctx.currentTime;
 
     const osc1 = ctx.createOscillator();
@@ -100,12 +207,11 @@ export function playRingbackTone(onEnd?: () => void): () => void {
     osc1.frequency.value = 400;
     osc2.frequency.value = 450;
 
-    // Pattern: 0.4s on, 0.2s off, 0.4s on, 2.0s off
-    gain.gain.setValueAtTime(0, now);
-    gain.gain.setValueAtTime(0.12, now + 0.05);
-    gain.gain.setValueAtTime(0, now + 0.45);
-    gain.gain.setValueAtTime(0.12, now + 0.65);
-    gain.gain.setValueAtTime(0, now + 1.05);
+    // Authentic Australian ring cadence: 0.4s on, 0.2s pause, 0.4s on, 0.4s pause
+    gain.gain.setValueAtTime(0.22, now);
+    gain.gain.setValueAtTime(0, now + 0.4);
+    gain.gain.setValueAtTime(0.22, now + 0.6);
+    gain.gain.setValueAtTime(0, now + 1.0);
 
     osc1.connect(gain);
     osc2.connect(gain);
@@ -113,8 +219,8 @@ export function playRingbackTone(onEnd?: () => void): () => void {
 
     osc1.start(now);
     osc2.start(now);
-    osc1.stop(now + 2.0);
-    osc2.stop(now + 2.0);
+    osc1.stop(now + 1.35);
+    osc2.stop(now + 1.35);
 
     osc1.onended = () => {
       fireEnd();
@@ -195,14 +301,36 @@ export function playStaticBurst(durationMs: number = 400): void {
 
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0.08, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + durationMs / 1000);
-
-    noise.connect(filter);
-    filter.connect(gain);
-    gain.connect(ctx.destination);
-
     noise.start();
   } catch {
     // ignore
   }
 }
+
+/** Line connection chime when call connects to exchange */
+export function playConnectionChime(): void {
+  try {
+    const ctx = getAudioContext();
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(850, now);
+    osc.frequency.setValueAtTime(1250, now + 0.08);
+
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.15, now + 0.02);
+    gain.gain.setValueAtTime(0.15, now + 0.14);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+
+    osc.start(now);
+    osc.stop(now + 0.24);
+  } catch {
+    // ignore
+  }
+}
+

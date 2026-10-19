@@ -1,6 +1,7 @@
 import React from 'react';
 import { Phone, Delete } from 'lucide-react';
 import { playDTMFTone } from '../audio/dtmf';
+import { triggerHaptic } from '../utils/haptics';
 
 interface IOSKeypadProps {
   dialedNumber: string;
@@ -16,15 +17,22 @@ export const IOSKeypad: React.FC<IOSKeypadProps> = ({
   onKeyPress,
 }) => {
   const handleButtonPress = (key: string) => {
+    triggerHaptic('light');
     playDTMFTone(key);
     if (onKeyPress) onKeyPress(key);
     onNumberChange(dialedNumber + key);
   };
 
   const handleBackspace = () => {
+    triggerHaptic('selection');
     if (dialedNumber.length > 0) {
       onNumberChange(dialedNumber.slice(0, -1));
     }
+  };
+
+  const handleCallClick = () => {
+    triggerHaptic('heavy');
+    onCall();
   };
 
   const keys = [
@@ -54,7 +62,7 @@ export const IOSKeypad: React.FC<IOSKeypadProps> = ({
             <button
               type="button"
               onClick={handleBackspace}
-              className="p-1.5 text-white/70 hover:text-white transition"
+              className="p-1.5 text-white/70 hover:text-white transition cursor-pointer"
               title="Delete"
             >
               <Delete className="w-5 h-5" />
@@ -62,7 +70,7 @@ export const IOSKeypad: React.FC<IOSKeypadProps> = ({
           )}
         </div>
         <span className="text-xs text-white/80 font-medium tracking-wide drop-shadow-xs">
-          Services Australia (Centrelink)
+          Centrelink (132 850)
         </span>
       </div>
 
@@ -91,9 +99,9 @@ export const IOSKeypad: React.FC<IOSKeypadProps> = ({
       <div className="flex justify-center w-full">
         <button
           type="button"
-          onClick={onCall}
+          onClick={handleCallClick}
           className="w-19 h-19 sm:w-20 sm:h-20 rounded-full bg-[#4cd964] hover:bg-[#43c859] active:scale-90 text-white flex items-center justify-center shadow-2xl shadow-green-900/40 transition cursor-pointer"
-          title="Place Call to 132 850"
+          title="Place Call to Centrelink (132 850)"
         >
           <Phone className="w-8 h-8 fill-current" />
         </button>

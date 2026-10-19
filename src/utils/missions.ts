@@ -47,7 +47,7 @@ export const IVR_MENUS: Record<string, IVRMenu> = {
   MAIN_MENU: {
     id: 'MAIN_MENU',
     spokenPrompt:
-      'Welcome to Services Australia. Please listen carefully as our menu options have recently changed. For JobSeeker and Mutual Obligations, press 1. For Age Pension and Carers, press 2. For Concession Cards and Healthcare, press 3. To report income or discuss a debt, press 4. Or say in a few words why you are calling today.',
+      'Welcome to Centrelink. Please listen carefully as our menu options have recently changed. For JobSeeker and Mutual Obligations, press 1. For Age Pension and Carers, press 2. For Concession Cards and Healthcare, press 3. To report income or discuss a debt, press 4. Or say in a few words why you are calling today.',
     options: [
       { key: '1', label: 'JobSeeker & Obligations', voicePhrase: 'jobseeker', action: 'SUBMENU', targetMenu: 'JOBSEEKER_MENU' },
       { key: '2', label: 'Age Pension & Carers', voicePhrase: 'pension', action: 'SUBMENU', targetMenu: 'PENSION_MENU' },

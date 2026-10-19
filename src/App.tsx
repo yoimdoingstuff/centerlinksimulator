@@ -19,13 +19,17 @@ import {
   AntiCheatClock,
 } from './utils/antiCheat';
 import {
+  playDialSequence,
   playRingbackTone,
   playDisconnectTone,
   playStaticBurst,
+  playConnectionChime,
+  getAudioContext,
 } from './audio/dtmf';
 import { holdMusic } from './audio/holdSynthesizer';
 import { speechEngine } from './audio/speechEngine';
 import { micAnalyzer, VoicePhraseResult } from './audio/micAnalyzer';
+import { triggerHaptic } from './utils/haptics';
 import {
   IOS_WALLPAPERS,
   getRandomWallpaper,
@@ -38,7 +42,12 @@ import { InfoDropdown } from './components/InfoDropdown';
 import { DifficultyModal } from './components/DifficultyModal';
 import { RoadblockModal } from './components/RoadblockModal';
 import { GameVictoryModal } from './components/GameVictoryModal';
-import { Wifi, Image as ImageIcon } from 'lucide-react';
+import { Image as ImageIcon } from 'lucide-react';
+import {
+  Representative,
+  getRandomRepresentative,
+} from './utils/representatives';
+import { generateClientIVR, generateClientAgent } from './utils/geminiClient';
 
 export default function App() {
   // Wallpaper state (randomized colorful blurred wallpaper)
@@ -52,6 +61,9 @@ export default function App() {
   const [currentMenuId, setCurrentMenuId] = useState<string>('MAIN_MENU');
   const [messages, setMessages] = useState<DialogueMessage[]>([]);
   const [currentMenuPrompt, setCurrentMenuPrompt] = useState<string>('');
+
+  // Signal dots state (0 to 5 dots)
+  const [signalDots, setSignalDots] = useState<number>(5);
 
   // UI Drawer & Modal states
   const [showDifficultyModal, setShowDifficultyModal] = useState<boolean>(true);
@@ -77,11 +89,16 @@ export default function App() {
   const [rushPeriodName, setRushPeriodName] = useState<string>('');
   const [currentTimeStr, setCurrentTimeStr] = useState<string>('01:12');
 
+  const [currentRepresentative, setCurrentRepresentative] = useState<Representative>(() =>
+    getRandomRepresentative()
+  );
+
   // References
   const antiCheatRef = useRef<AntiCheatClock>(new AntiCheatClock());
   const callIntervalRef = useRef<number | null>(null);
+  const signalIntervalRef = useRef<number | null>(null);
   const ringCancelRef = useRef<(() => void) | null>(null);
-  const isTransitioningRef = useRef<boolean>(false);
+  const lastDropCallSecondsRef = useRef<number>(-999);
 
   const activeMission: Mission = MISSIONS[missionIndex % MISSIONS.length];
 
@@ -108,11 +125,32 @@ export default function App() {
     }
   }, [difficulty, callStatus]);
 
-  // Connect microphone callbacks
+  // Keep latest refs for callbacks to prevent re-attaching and cancelling calls on state changes
+  const callStatusRef = useRef(callStatus);
+  callStatusRef.current = callStatus;
+  const currentMenuIdRef = useRef(currentMenuId);
+  currentMenuIdRef.current = currentMenuId;
+  const queuePosRef = useRef(queuePos);
+  queuePosRef.current = queuePos;
+  const isMicActiveRef = useRef(isMicActive);
+  isMicActiveRef.current = isMicActive;
+  const difficultyRef = useRef(difficulty);
+  difficultyRef.current = difficulty;
+  const activeMissionRef = useRef(activeMission);
+  activeMissionRef.current = activeMission;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const callSecondsRef = useRef(callSeconds);
+  callSecondsRef.current = callSeconds;
+
+  // Stable handler ref so mount effect can call it safely
+  const handleUserSpeechRef = useRef<(result: VoicePhraseResult) => void>(() => {});
+
+  // Connect microphone callbacks ONCE on mount
   useEffect(() => {
     micAnalyzer.setCallbacks(
       (db, zone) => {
-        if (!isMicActive) {
+        if (!isMicActiveRef.current) {
           setCurrentDb(0);
           setCurrentZone('TOO_QUIET');
           return;
@@ -124,8 +162,8 @@ export default function App() {
         }
       },
       (result) => {
-        if (!isMicActive) return;
-        handleUserSpeech(result);
+        if (!isMicActiveRef.current) return;
+        handleUserSpeechRef.current(result);
       }
     );
 
@@ -134,25 +172,118 @@ export default function App() {
       speechEngine.stop();
       holdMusic.stop();
       if (callIntervalRef.current) clearInterval(callIntervalRef.current);
+      if (signalIntervalRef.current) clearInterval(signalIntervalRef.current);
       if (ringCancelRef.current) ringCancelRef.current();
     };
-  }, [callStatus, currentMenuId, queuePos, isMicActive]);
+  }, []); // Run ONCE on mount only! Never cancel in-progress calls on state change
+
+  // Signal dots fluctuation and zero-signal line drop simulation (Enforcing >= 3 min gap between dropouts)
+  useEffect(() => {
+    const isCallActive =
+      callStatus !== 'IDLE' && callStatus !== 'CALL_ENDED' && callStatus !== 'VICTORY';
+
+    if (!isCallActive) {
+      setSignalDots(5);
+      if (signalIntervalRef.current) {
+        clearInterval(signalIntervalRef.current);
+        signalIntervalRef.current = null;
+      }
+      return;
+    }
+
+    // Fluctuate signal every 6-8 seconds
+    signalIntervalRef.current = window.setInterval(() => {
+      const currentSec = callSecondsRef.current;
+      const secondsSinceLastDrop = currentSec - lastDropCallSecondsRef.current;
+
+      // Must have at least 180 seconds (3 minutes) of total calling AND 3 minutes since last drop
+      const canDrop = currentSec >= 180 && secondsSinceLastDrop >= 180;
+
+      const rand = Math.random();
+      let newSignal = 5;
+
+      if (canDrop && rand < 0.025) {
+        // Rare carrier line drop after at least 3 minutes!
+        newSignal = 0;
+        lastDropCallSecondsRef.current = currentSec;
+      } else if (rand < 0.15) {
+        newSignal = 2; // Weak signal suspense without dropping
+      } else if (rand < 0.45) {
+        newSignal = 3;
+      } else if (rand < 0.78) {
+        newSignal = 4;
+      } else {
+        newSignal = 5;
+      }
+
+      setSignalDots(newSignal);
+
+      // If signal reaches 0, trigger carrier line drop
+      if (newSignal === 0) {
+        triggerHaptic('error');
+        setTimeout(() => {
+          holdMusic.stop();
+          playStaticBurst(400);
+          playDisconnectTone(2000);
+          setCallStatus('LINE_DROPPED');
+          setRoadblockType('LINE_DROPPED');
+          addMessage('SYSTEM', 'CARRIER SIGNAL LOST: 0 bars of reception. Call dropped.');
+        }, 1200);
+      }
+    }, 7000);
+
+    return () => {
+      if (signalIntervalRef.current) {
+        clearInterval(signalIntervalRef.current);
+        signalIntervalRef.current = null;
+      }
+    };
+  }, [callStatus, difficulty]);
 
   // Cycle wallpaper
   const handleCycleWallpaper = () => {
+    triggerHaptic('selection');
     const currentIndex = IOS_WALLPAPERS.findIndex((w) => w.id === currentWallpaper.id);
     const nextIndex = (currentIndex + 1) % IOS_WALLPAPERS.length;
     setCurrentWallpaper(IOS_WALLPAPERS[nextIndex]);
   };
 
-  // Toggle microphone with hardware mute
+  // Drag-and-drop listener to easily drop an MP3 into the browser
+  useEffect(() => {
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+    };
+
+    const handleDrop = (e: DragEvent) => {
+      e.preventDefault();
+      if (!e.dataTransfer?.files || e.dataTransfer.files.length === 0) return;
+      const file = e.dataTransfer.files[0];
+      if (file.name.toLowerCase().endsWith('.mp3') || file.type.includes('audio')) {
+        holdMusic.setCustomAudio(file, file.name);
+        triggerHaptic('heavy');
+        addMessage('SYSTEM', `Loaded custom hold music: "${file.name}"`);
+      }
+    };
+
+    window.addEventListener('dragover', handleDragOver);
+    window.addEventListener('drop', handleDrop);
+    return () => {
+      window.removeEventListener('dragover', handleDragOver);
+      window.removeEventListener('drop', handleDrop);
+    };
+  }, []);
+
+  // Toggle microphone with hardware mute & resume
   const handleToggleMic = () => {
     const nextState = !isMicActive;
     setIsMicActive(nextState);
-    micAnalyzer.setMuted(!nextState); // True tab-level hardware mute!
+    micAnalyzer.setMuted(!nextState);
     if (!nextState) {
       setCurrentDb(0);
       setCurrentZone('TOO_QUIET');
+    } else {
+      // Re-activate voice listening immediately on unmute
+      micAnalyzer.startListening();
     }
   };
 
@@ -174,12 +305,25 @@ export default function App() {
     ]);
   };
 
-  // Start call
-  const handleDial = async () => {
-    if (isTransitioningRef.current) return;
-    isTransitioningRef.current = true;
+  // Start call with audio unlock and guaranteed connection
+  const handleDial = () => {
+    triggerHaptic('heavy');
 
-    // Unmute mic when placing new call
+    // Unlock Web Audio & SpeechSynthesis immediately on user click gesture
+    const ctx = getAudioContext();
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.resume();
+      } catch {
+        // ignore
+      }
+    }
+
+    // Unmute mic when placing call
     setIsMicActive(true);
     micAnalyzer.setMuted(false);
     micAnalyzer.requestMicrophone().catch(() => {});
@@ -191,6 +335,7 @@ export default function App() {
     setTamperDetected(false);
     setRoadblockType(null);
     setShowVictory(false);
+    setSignalDots(5);
 
     const queueData = calculateTimeOfDayQueue(difficulty);
     setQueuePos(queueData.initialCount);
@@ -199,9 +344,16 @@ export default function App() {
     setLoopsSurvived(0);
     setPeakDb(0);
 
-    // Guaranteed transition to Robocaller IVR after ring tone
-    ringCancelRef.current = playRingbackTone(() => {
-      isTransitioningRef.current = false;
+    // Cancel any in-progress dial/ring sequence
+    if (ringCancelRef.current) {
+      ringCancelRef.current();
+      ringCancelRef.current = null;
+    }
+
+    // Play full DTMF touch-tone sequence for 1-3-2-8-5-0, then ringback, then connect to Centrelink
+    ringCancelRef.current = playDialSequence(dialedNumber || '132850', () => {
+      // Once connected, reset timer to 0 so the in-call timer counts active call time
+      setCallSeconds(0);
       enterRobocaller('MAIN_MENU');
     });
 
@@ -218,7 +370,7 @@ export default function App() {
         setRoadblockType('CLOCK_TAMPERED');
         addMessage(
           'SYSTEM',
-          'SECURITY ALERT: System clock discrepancy detected. In accordance with Services Australia integrity rules, you have been pushed back 45 spots in the queue.'
+          'SECURITY ALERT: System clock discrepancy detected. In accordance with Centrelink integrity rules, you have been pushed back 45 spots in the queue.'
         );
       }
     }, 1000);
@@ -229,6 +381,7 @@ export default function App() {
     setCallStatus('ROBOCALLER_IVR');
     setCurrentMenuId(menuId);
     holdMusic.stop();
+    micAnalyzer.setMeterActive(true); // Active listening during IVR
 
     const menu = IVR_MENUS[menuId] || IVR_MENUS.MAIN_MENU;
     setCurrentMenuPrompt(menu.spokenPrompt);
@@ -241,9 +394,10 @@ export default function App() {
     });
   };
 
-  // Enter Hold Queue
+  // Enter Hold Queue (Isolates mic so hold music never registers on microphone)
   const enterHoldQueue = (initialWaitMessage?: string) => {
     setCallStatus('HOLD_QUEUE');
+    micAnalyzer.setMeterActive(false); // Zero meter & isolate mic during hold music
     micAnalyzer.stopListening();
 
     const msg =
@@ -258,24 +412,32 @@ export default function App() {
 
   // Hang up
   const handleHangUp = () => {
-    isTransitioningRef.current = false;
+    triggerHaptic('heavy');
     speechEngine.stop();
     holdMusic.stop();
+    micAnalyzer.setMeterActive(false);
     micAnalyzer.stopListening();
     if (callIntervalRef.current) clearInterval(callIntervalRef.current);
+    if (signalIntervalRef.current) clearInterval(signalIntervalRef.current);
     if (ringCancelRef.current) ringCancelRef.current();
     setCallStatus('IDLE');
+    setSignalDots(5);
     addMessage('SYSTEM', 'Call disconnected.');
   };
 
   // Panic redial when line drops
   const handlePanicRedial = () => {
+    triggerHaptic('medium');
     setRoadblockType(null);
     setCallStatus('HOLD_QUEUE');
+    setSignalDots(4);
+    lastDropCallSecondsRef.current = callSeconds; // Reset 3-minute drop countdown
+    micAnalyzer.setMeterActive(false);
+
     playRingbackTone(() => {
       addMessage(
         'ROBOCALLER',
-        `Reconnected to Services Australia exchange. Your position in line (#${queuePos}) was preserved.`
+        `Reconnected to Centrelink phone lines. Your position in line (#${queuePos}) was preserved.`
       );
       holdMusic.play();
     });
@@ -319,13 +481,15 @@ export default function App() {
 
   // Handle user's spoken voice
   const handleUserSpeech = async (result: VoicePhraseResult) => {
-    if (!isMicActive) return;
-    if (callStatus !== 'ROBOCALLER_IVR' && callStatus !== 'AGENT_TALKING') return;
+    if (!isMicActiveRef.current) return;
+    const currentStatus = callStatusRef.current;
+    if (currentStatus !== 'ROBOCALLER_IVR' && currentStatus !== 'AGENT_TALKING') return;
 
     addMessage('USER', result.transcript, result.peakDb);
 
     // Hostile screaming penalty (> 82 dB)
     if (result.peakDb >= 82) {
+      triggerHaptic('error');
       setRoadblockType('HOSTILE_CALLER');
       setQueuePos((p) => p + 25);
       setReverseJumps((j) => j + 1);
@@ -390,6 +554,14 @@ export default function App() {
         });
       }
     } else if (callStatus === 'AGENT_TALKING') {
+      const rep = currentRepresentative;
+      const voiceOpts = {
+        gender: rep.gender,
+        pitch: rep.pitch,
+        rate: rep.rate,
+        voiceHints: rep.voiceHints,
+      };
+
       try {
         const res = await fetch('/api/call/agent', {
           method: 'POST',
@@ -398,6 +570,7 @@ export default function App() {
             speechText: result.transcript,
             volumeDb: result.peakDb,
             activeMission,
+            representative: rep,
             dialogueHistory: messages.slice(-4),
             holdTimeSeconds: callSeconds,
             difficulty,
@@ -407,13 +580,13 @@ export default function App() {
         if (res.ok) {
           const data = await res.json();
           addMessage('AGENT', data.agentResponseText);
-          speechEngine.speakRepresentative(data.agentResponseText, () => {
+          speechEngine.speakRepresentative(data.agentResponseText, voiceOpts, () => {
             if (data.approved) {
               setCallStatus('VICTORY');
               setShowVictory(true);
             } else if (data.agentState === 'PUT_ON_HOLD_AGAIN') {
               enterHoldQueue(
-                'Sharon has placed you on hold while consulting with a senior technical specialist...'
+                `${rep.name} has placed you on hold while consulting with a senior technical specialist...`
               );
             } else if (isMicActive) {
               micAnalyzer.startListening();
@@ -422,31 +595,60 @@ export default function App() {
           return;
         }
       } catch {
-        // client fallback
+        // try client-side Gemini fallback for static GitHub Pages
+        const clientRes = await generateClientAgent({
+          speechText: result.transcript,
+          volumeDb: result.peakDb,
+          activeMission,
+          representative: rep,
+          holdTimeSeconds: callSeconds,
+          difficulty,
+        });
+
+        if (clientRes) {
+          addMessage('AGENT', clientRes.agentResponseText);
+          speechEngine.speakRepresentative(clientRes.agentResponseText, voiceOpts, () => {
+            if (clientRes.approved) {
+              setCallStatus('VICTORY');
+              setShowVictory(true);
+            } else if (clientRes.agentState === 'PUT_ON_HOLD_AGAIN') {
+              enterHoldQueue(
+                `${rep.name} has placed you on hold while consulting with a senior technical specialist...`
+              );
+            } else if (isMicActive) {
+              micAnalyzer.startListening();
+            }
+          });
+          return;
+        }
       }
 
+      // Offline programmatic fallback using the representative's authentic voice
       const matchedPhrase = activeMission.keyPhrases.some((phrase) =>
         result.transcript.toLowerCase().includes(phrase.toLowerCase())
       );
 
       if (matchedPhrase && result.peakDb >= 50 && result.peakDb <= 81) {
         const winMsg =
-          "Right, look... I've found your file on my screen. System's playing up today, but I've manually overridden the breach and stamped your exemption. Your payment should clear in 24 to 48 hours. Is there anything else today?";
+          rep.approvalResponses[Math.floor(Math.random() * rep.approvalResponses.length)];
         addMessage('AGENT', winMsg);
-        speechEngine.speakRepresentative(winMsg, () => {
+        speechEngine.speakRepresentative(winMsg, voiceOpts, () => {
           setCallStatus('VICTORY');
           setShowVictory(true);
         });
       } else {
         const stallMsg =
-          "Centrelink Services, Sharon speaking. Yeah look, I can see something on your screen here, but the server's running slow. Can you clearly state why you believe this decision is incorrect?";
+          rep.stallResponses[Math.floor(Math.random() * rep.stallResponses.length)];
         addMessage('AGENT', stallMsg);
-        speechEngine.speakRepresentative(stallMsg, () => {
+        speechEngine.speakRepresentative(stallMsg, voiceOpts, () => {
           if (isMicActive) micAnalyzer.startListening();
         });
       }
     }
   };
+
+  // Wire up the speech recognition callback to the current speech handler
+  handleUserSpeechRef.current = handleUserSpeech;
 
   // Hold queue loop
   useEffect(() => {
@@ -454,17 +656,6 @@ export default function App() {
 
     const config = DIFFICULTY_CONFIGS[difficulty];
     const holdInterval = window.setInterval(() => {
-      // Line drop
-      if (Math.random() < config.dropProbabilityPerMinute / 12) {
-        holdMusic.stop();
-        playStaticBurst(300);
-        playDisconnectTone(2000);
-        setCallStatus('LINE_DROPPED');
-        setRoadblockType('LINE_DROPPED');
-        addMessage('SYSTEM', 'CRITICAL WARNING: Carrier connection lost! Line dropped.');
-        return;
-      }
-
       // Reverse queue jump
       if (Math.random() < config.reverseJumpProbability / 10) {
         const bump = Math.floor(2 + Math.random() * 5);
@@ -485,7 +676,7 @@ export default function App() {
           clearInterval(holdInterval);
           holdMusic.stop();
 
-          // Trap chance
+          // Trap chance: "Hold for an agent who never answers"
           if (Math.random() < 0.25) {
             setCallStatus('AGENT_NEVER_ANSWERS_TRAP');
             const trapMsg =
@@ -499,13 +690,25 @@ export default function App() {
             return prev;
           }
 
-          // Real representative Sharon picks up!
+          // Diverse representative answers! (Darren, Priya, Greg, Minh, Dimitri, Sharon, Gurpreet, Mateo)
+          const rep = getRandomRepresentative();
+          setCurrentRepresentative(rep);
           setCallStatus('AGENT_TALKING');
-          const agentGreeting = `Centrelink Services Australia, Sharon speaking. I have your CRN ${activeMission.crn} on screen. How can I assist you with your mutual obligations today?`;
+          micAnalyzer.setMeterActive(true);
+          const agentGreeting = rep.greeting(activeMission.crn, activeMission.title);
           addMessage('AGENT', agentGreeting);
-          speechEngine.speakRepresentative(agentGreeting, () => {
-            if (isMicActive) micAnalyzer.startListening();
-          });
+          speechEngine.speakRepresentative(
+            agentGreeting,
+            {
+              gender: rep.gender,
+              pitch: rep.pitch,
+              rate: rep.rate,
+              voiceHints: rep.voiceHints,
+            },
+            () => {
+              if (isMicActive) micAnalyzer.startListening();
+            }
+          );
           return 0;
         }
         return prev - 1;
@@ -522,6 +725,7 @@ export default function App() {
     setMessages([]);
     speechEngine.stop();
     holdMusic.stop();
+    setSignalDots(5);
     setShowDifficultyModal(true);
   };
 
@@ -552,26 +756,31 @@ export default function App() {
       {/* Soft Vignette / Translucent Overlay */}
       <div className="fixed inset-0 bg-black/25 pointer-events-none" />
 
-      {/* iOS 7 Status Bar */}
+      {/* iOS 7 Status Bar with EXACT Mathematical Center Clock */}
       <header className="relative z-30 w-full pt-2 px-5 flex items-center justify-between text-white/95 text-xs font-light">
-        {/* Signal Dots + Carrier */}
+        {/* Left: 5 Signal Dots + Carrier (fluctuates during call) */}
         <div className="flex items-center gap-1.5">
           <div className="flex items-center gap-0.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-white" />
-            <span className="w-1.5 h-1.5 rounded-full bg-white" />
-            <span className="w-1.5 h-1.5 rounded-full bg-white" />
-            <span className="w-1.5 h-1.5 rounded-full bg-white" />
-            <span className="w-1.5 h-1.5 rounded-full bg-white/40" />
+            {[1, 2, 3, 4, 5].map((dot) => (
+              <span
+                key={dot}
+                className={`w-1.5 h-1.5 rounded-full transition-colors duration-300 ${
+                  dot <= signalDots ? 'bg-white' : 'bg-white/30'
+                }`}
+              />
+            ))}
           </div>
-          <span className="font-normal text-[11px] tracking-wide ml-1">Telstra 4G</span>
+          <span className="font-normal text-[11px] tracking-wide ml-1">
+            {signalDots === 0 ? 'Searching...' : 'Telstra 4G'}
+          </span>
         </div>
 
-        {/* Center Time */}
-        <div className="text-center font-normal tracking-wide text-[13px] drop-shadow-xs">
+        {/* Center: Clock Dead-Centered Absolutely! */}
+        <div className="absolute left-1/2 -translate-x-1/2 top-2 font-normal tracking-wide text-[13px] drop-shadow-xs pointer-events-none">
           {currentTimeStr}
         </div>
 
-        {/* Battery + Wallpaper Switcher */}
+        {/* Right: Battery + Wallpaper Switcher */}
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -613,6 +822,7 @@ export default function App() {
             isMicActive={isMicActive}
             messages={messages}
             currentMenuPrompt={currentMenuPrompt}
+            agentName={currentRepresentative.name}
             onHangUp={handleHangUp}
             onKeypadPress={handleKeypadPress}
             onToggleMic={handleToggleMic}
@@ -666,7 +876,7 @@ export default function App() {
 
       {/* Clean iOS 7 Glass Bottom Bar */}
       <footer className="relative z-20 w-full py-2 px-4 text-center text-[10px] text-white/50 font-light select-none">
-        <span>Services Australia 132 850 · iOS 7.1 Telephony Edition</span>
+        <span>Centrelink 132 850 · iOS 7.1 Telephony Edition</span>
       </footer>
     </div>
   );

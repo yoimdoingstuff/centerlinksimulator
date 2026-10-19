@@ -2,8 +2,8 @@ import { getAudioContext } from './dtmf';
 import { holdMusicConfig } from '../config/holdMusicConfig';
 
 /**
- * Government telephone hold music controller
- * Powered by holdMusicConfig.ts (custom audio or procedural synth) with ducking
+ * Authentic procedural synthesizer for "Opus No. 1" by Tim Carleton & Darrick Deel
+ * The most iconic telephone hold music in history.
  */
 
 class HoldMusicController {
@@ -15,31 +15,43 @@ class HoldMusicController {
   private synthInterval: number | null = null;
   private currentNoteIndex: number = 0;
 
-  // Iconic classical hold tune melody notes (Vivaldi Spring & Mozart medley in Hz)
-  private melody: Array<{ freq: number; dur: number }> = [
-    { freq: 523.25, dur: 0.35 }, // C5
-    { freq: 659.25, dur: 0.35 }, // E5
-    { freq: 659.25, dur: 0.35 }, // E5
-    { freq: 659.25, dur: 0.35 }, // E5
-    { freq: 587.33, dur: 0.18 }, // D5
-    { freq: 523.25, dur: 0.18 }, // C5
-    { freq: 587.33, dur: 0.70 }, // D5
-    { freq: 392.00, dur: 0.35 }, // G4
-    { freq: 587.33, dur: 0.35 }, // D5
-    { freq: 659.25, dur: 0.35 }, // E5
-    { freq: 587.33, dur: 0.35 }, // D5
-    { freq: 523.25, dur: 0.70 }, // C5
-    { freq: 659.25, dur: 0.35 }, // E5
-    { freq: 783.99, dur: 0.35 }, // G5
-    { freq: 783.99, dur: 0.35 }, // G5
-    { freq: 698.46, dur: 0.18 }, // F5
-    { freq: 659.25, dur: 0.18 }, // E5
-    { freq: 587.33, dur: 0.70 }, // D5
-    { freq: 523.25, dur: 0.70 }, // C5
+  // Tim Carleton's "Opus No. 1" melodic transcription (in Eb major)
+  private melody: Array<{ freq: number; dur: number; bassFreq?: number }> = [
+    { freq: 311.13, dur: 0.38, bassFreq: 155.56 }, // Eb4 (Eb2 bass)
+    { freq: 392.00, dur: 0.38 },                    // G4
+    { freq: 466.16, dur: 0.38 },                    // Bb4
+    { freq: 523.25, dur: 0.58 },                    // C5
+    { freq: 466.16, dur: 0.38 },                    // Bb4
+    { freq: 392.00, dur: 0.38 },                    // G4
+    { freq: 349.23, dur: 0.38, bassFreq: 174.61 }, // F4 (F2 bass)
+    { freq: 392.00, dur: 0.38 },                    // G4
+    { freq: 311.13, dur: 0.76, bassFreq: 155.56 }, // Eb4 (long)
+    { freq: 261.63, dur: 0.38, bassFreq: 130.81 }, // C4 (C2 bass)
+    { freq: 311.13, dur: 0.38 },                    // Eb4
+    { freq: 349.23, dur: 0.38 },                    // F4
+    { freq: 392.00, dur: 0.58 },                    // G4
+    { freq: 466.16, dur: 0.38 },                    // Bb4
+    { freq: 415.30, dur: 0.38, bassFreq: 207.65 }, // Ab4 (Ab2 bass)
+    { freq: 392.00, dur: 0.38 },                    // G4
+    { freq: 349.23, dur: 0.58 },                    // F4
+    { freq: 311.13, dur: 0.95, bassFreq: 155.56 }, // Eb4 resolution
   ];
 
+  private customTrackTitle: string | null = null;
+  private customAudioUrl: string | null = null;
+
   public getTrackName(): string {
-    return holdMusicConfig.trackTitle;
+    return this.customTrackTitle || holdMusicConfig.trackTitle;
+  }
+
+  public setCustomAudio(urlOrFile: string | File, title?: string): void {
+    if (typeof urlOrFile === 'string') {
+      this.customAudioUrl = urlOrFile;
+      this.customTrackTitle = title || 'Custom Hold Music';
+    } else {
+      this.customAudioUrl = URL.createObjectURL(urlOrFile);
+      this.customTrackTitle = title || urlOrFile.name.replace(/\.[^/.]+$/, '');
+    }
   }
 
   public play(): void {
@@ -56,7 +68,7 @@ class HoldMusicController {
           // Authentic telephone bandwidth filter (300Hz - 3400Hz)
           this.filterNode.type = 'bandpass';
           this.filterNode.frequency.value = holdMusicConfig.filterCenterFrequency;
-          this.filterNode.Q.value = 0.65;
+          this.filterNode.Q.value = 0.7;
         } else {
           this.filterNode.type = 'allpass';
         }
@@ -71,20 +83,49 @@ class HoldMusicController {
         ctx.currentTime
       );
 
-      if (holdMusicConfig.audioFileUrl) {
-        // Play audio file from config
-        this.audioElem = new Audio(holdMusicConfig.audioFileUrl);
-        this.audioElem.loop = true;
-        this.audioElem.volume = this.isDucked
+      // Prioritize: 1. User dropped file, 2. holdMusicConfig URL, 3. standard dropped MP3 names in public/
+      const candidateUrls = [
+        this.customAudioUrl,
+        holdMusicConfig.audioFileUrl,
+        './opus-no-1.mp3',
+        './hold-music.mp3',
+        '/opus-no-1.mp3',
+        '/hold-music.mp3',
+      ].filter(Boolean) as string[];
+
+      if (candidateUrls.length > 0) {
+        const audioUrl = candidateUrls[0];
+        const audio = new Audio(audioUrl);
+        audio.loop = true;
+        audio.volume = this.isDucked
           ? baseVol * holdMusicConfig.duckingMultiplier
           : baseVol;
-        this.audioElem.play().catch((e) => console.warn('Audio file playback pending gesture', e));
+
+        audio.oncanplay = () => {
+          if (!this.isPlaying) return;
+          audio.play().catch(() => {});
+        };
+
+        audio.onerror = () => {
+          // If mp3 is not found in public/ or failed, fallback immediately to authentic synth!
+          if (this.isPlaying && !this.synthInterval) {
+            this.startSynthLoop();
+          }
+        };
+
+        this.audioElem = audio;
+        audio.play().catch(() => {
+          // In case of playback failure, start procedural synth
+          if (this.isPlaying && !this.synthInterval) {
+            this.startSynthLoop();
+          }
+        });
       } else {
-        // Start procedural lo-fi synthesizer
         this.startSynthLoop();
       }
     } catch (err) {
       console.warn('Hold music play error', err);
+      this.startSynthLoop();
     }
   }
 
@@ -97,6 +138,7 @@ class HoldMusicController {
     if (this.audioElem) {
       this.audioElem.pause();
       this.audioElem.currentTime = 0;
+      this.audioElem = null;
     }
   }
 
@@ -110,7 +152,7 @@ class HoldMusicController {
       const targetGain = ducked ? baseVol * holdMusicConfig.duckingMultiplier : baseVol;
 
       if (this.masterGain) {
-        this.masterGain.gain.linearRampToValueAtTime(targetGain, ctx.currentTime + 0.2);
+        this.masterGain.gain.linearRampToValueAtTime(targetGain, ctx.currentTime + 0.15);
       }
       if (this.audioElem) {
         this.audioElem.volume = targetGain;
@@ -132,18 +174,18 @@ class HoldMusicController {
         const note = this.melody[this.currentNoteIndex];
         this.currentNoteIndex = (this.currentNoteIndex + 1) % this.melody.length;
 
+        const now = ctx.currentTime;
+        const dur = note.dur * 0.95;
+
+        // Lead synth (Smooth Rhodes/Marimba sound)
         const osc = ctx.createOscillator();
         const noteGain = ctx.createGain();
 
-        // Cheesy cheap 80s/90s sawtooth PBX tone
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(note.freq, ctx.currentTime);
-
-        const now = ctx.currentTime;
-        const dur = note.dur * 0.9;
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(note.freq, now);
 
         noteGain.gain.setValueAtTime(0, now);
-        noteGain.gain.linearRampToValueAtTime(0.25, now + 0.04);
+        noteGain.gain.linearRampToValueAtTime(0.28, now + 0.02);
         noteGain.gain.exponentialRampToValueAtTime(0.001, now + dur);
 
         osc.connect(noteGain);
@@ -152,14 +194,35 @@ class HoldMusicController {
         }
 
         osc.start(now);
-        osc.stop(now + dur + 0.05);
+        osc.stop(now + dur + 0.04);
+
+        // Warm subtle bass note on bar downbeats
+        if (note.bassFreq) {
+          const bassOsc = ctx.createOscillator();
+          const bassGain = ctx.createGain();
+
+          bassOsc.type = 'sine';
+          bassOsc.frequency.setValueAtTime(note.bassFreq, now);
+
+          bassGain.gain.setValueAtTime(0, now);
+          bassGain.gain.linearRampToValueAtTime(0.18, now + 0.03);
+          bassGain.gain.exponentialRampToValueAtTime(0.001, now + dur * 1.5);
+
+          bassOsc.connect(bassGain);
+          if (this.masterGain) {
+            bassGain.connect(this.masterGain);
+          }
+
+          bassOsc.start(now);
+          bassOsc.stop(now + dur * 1.5 + 0.05);
+        }
       } catch {
         // audio context suspended
       }
     };
 
     playNextNote();
-    this.synthInterval = window.setInterval(playNextNote, 340);
+    this.synthInterval = window.setInterval(playNextNote, 380);
   }
 }
 

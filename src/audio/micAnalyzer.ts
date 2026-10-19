@@ -50,8 +50,8 @@ export class MicAnalyzer {
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
-          noiseSuppression: false, // Don't suppress yelling!
-          autoGainControl: false,  // Don't auto-dampen yelling!
+          noiseSuppression: true,
+          autoGainControl: false,
         },
       });
 
@@ -89,6 +89,13 @@ export class MicAnalyzer {
       if (this.silenceTimer) {
         clearTimeout(this.silenceTimer);
         this.silenceTimer = null;
+      }
+      if (this.speechRecognition) {
+        try {
+          this.speechRecognition.stop();
+        } catch {
+          // ignore
+        }
       }
       if (this.onVolumeTick) {
         this.onVolumeTick(0, 'TOO_QUIET');
@@ -140,6 +147,23 @@ export class MicAnalyzer {
     }
   }
 
+  private isMeterActive: boolean = true;
+
+  public setMeterActive(active: boolean): void {
+    this.isMeterActive = active;
+    if (!active) {
+      this.currentDb = 0;
+      this.peakDbInPhrase = 0;
+      if (this.silenceTimer) {
+        clearTimeout(this.silenceTimer);
+        this.silenceTimer = null;
+      }
+      if (this.onVolumeTick) {
+        this.onVolumeTick(0, 'TOO_QUIET');
+      }
+    }
+  }
+
   public cleanup(): void {
     this.stopListening();
     if (this.animFrameId) {
@@ -155,12 +179,12 @@ export class MicAnalyzer {
   private startMeterLoop(): void {
     if (!this.analyser) return;
 
-    const dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+    const floatArray = new Float32Array(this.analyser.fftSize);
 
     const checkVolume = () => {
       if (!this.analyser) return;
 
-      if (this.isMuted) {
+      if (this.isMuted || !this.isMeterActive) {
         this.currentDb = 0;
         if (this.onVolumeTick) {
           this.onVolumeTick(0, 'TOO_QUIET');
@@ -169,20 +193,20 @@ export class MicAnalyzer {
         return;
       }
 
-      this.analyser.getByteTimeDomainData(dataArray);
+      this.analyser.getFloatTimeDomainData(floatArray);
 
-      // Compute RMS
+      // Compute RMS from true 32-bit float audio buffer (zero DC quantization error)
       let sumSquares = 0;
-      for (let i = 0; i < dataArray.length; i++) {
-        const normalized = (dataArray[i] - 128) / 128;
-        sumSquares += normalized * normalized;
+      for (let i = 0; i < floatArray.length; i++) {
+        const val = floatArray[i];
+        sumSquares += val * val;
       }
-      const rms = Math.sqrt(sumSquares / dataArray.length);
+      const rms = Math.sqrt(sumSquares / floatArray.length);
 
-      // Convert to subjective dB scale (0 to 100)
+      // Noise floor gate: values below 0.012 are ambient room hiss or hardware mute DC drift
       let db = 0;
-      if (rms > 0.001) {
-        db = Math.round(20 * Math.log10(rms * 10) + 72);
+      if (rms > 0.012) {
+        db = Math.round(20 * Math.log10(rms * 10) + 68);
       }
       db = Math.max(0, Math.min(100, db));
       this.currentDb = db;
@@ -193,7 +217,7 @@ export class MicAnalyzer {
         this.onVolumeTick(db, zone);
       }
 
-      if (this.isListening && db > 25) {
+      if (this.isListening && db > 28) {
         this.peakDbInPhrase = Math.max(this.peakDbInPhrase, db);
         this.dbSamples.push(db);
 

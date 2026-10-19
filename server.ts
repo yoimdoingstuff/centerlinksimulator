@@ -126,25 +126,37 @@ Bureaucratic Behavior Rules:
 
 // Human representative dialogue endpoint
 app.post('/api/call/agent', async (req, res) => {
-  const { speechText, volumeDb, activeMission, dialogueHistory, holdTimeSeconds, difficulty } = req.body;
+  const {
+    speechText,
+    volumeDb,
+    activeMission,
+    dialogueHistory,
+    holdTimeSeconds,
+    difficulty,
+    representative,
+  } = req.body;
+
+  const repName = representative?.name || 'Sharon';
+  const repHeritage = representative?.heritage || 'Australian public service veteran';
+  const repTitle = representative?.title || 'Senior Customer Service Officer';
 
   // Screaming check at the human rep
   if (volumeDb >= 84) {
     return res.json({
-      agentResponseText: "Sir/Ma'am, I understand you are frustrated, but if you continue to raise your voice at me I will terminate this call immediately. I am placing you back on hold while I speak with my team leader.",
+      agentResponseText: `Sir/Ma'am, this is ${repName}. I understand you are frustrated, but if you continue to shout I will have to terminate this call. I am placing you back on hold while I speak with my team leader.`,
       agentState: 'PUT_ON_HOLD_AGAIN',
       mood: 'OFFENDED',
-      approved: false
+      approved: false,
     });
   }
 
   // Too quiet check
   if (volumeDb < 28 || !speechText || speechText.trim().length === 0) {
     return res.json({
-      agentResponseText: "Hello? Are you still there? I can barely hear you, the line might be dropping out...",
+      agentResponseText: `Hello? ${repName} from Centrelink here. I can barely hear you, the line might be breaking up...`,
       agentState: 'CONVERSING',
       mood: 'CONFUSED',
-      approved: false
+      approved: false,
     });
   }
 
@@ -152,8 +164,9 @@ app.post('/api/call/agent', async (req, res) => {
     try {
       const response = await ai.models.generateContent({
         model: 'gemini-3.8-flash',
-        contents: `You are "Sharon", an exhausted, cynical Australian Centrelink customer service representative.
-You have been working at Services Australia for 14 years. You speak in weary, bureaucratic Australian vernacular ("mate", "look to be honest", "the system is taking forever to load", "bear with me").
+        contents: `You are "${repName}", a Centrelink ${repTitle} in Australia.
+Background/Heritage: ${repHeritage}.
+You work at a busy Centrelink call centre with slow departmental computers, typing on a mechanical keyboard. Speak in authentic Australian call centre colloquialisms reflecting your character background.
 Player Mission to Solve: "${activeMission?.title} - ${activeMission?.description}".
 Required Key Concepts: "${activeMission?.keyPhrases?.join(', ')}".
 Caller's Loudness: ${volumeDb} dB.
@@ -163,10 +176,10 @@ Hold time survived by caller: ${holdTimeSeconds} seconds.
 Difficulty: ${difficulty}.
 
 Rules:
-1. If caller explains their case clearly and with firm urgency (55-80 dB) AND mentions key facts relevant to their mission, and they have answered at least 1-2 questions, you can finally approve their claim!
-2. If caller is too timid or vague, give a classic bureaucratic stalling answer ("Look, that form was supposed to be lodged through the myGov document uploader in TIFF format...") or say you need to place them on hold.
-3. If they scream (> 82 dB), you get defensive and threaten to hang up or put them on hold.
-4. Keep the response under 45 words, sounding like an exhausted Australian human bureaucrat typing on a slow computer.
+1. If caller explains their case clearly with firm urgency (55-80 dB) AND mentions key facts relevant to their mission, and they have provided their explanation, you can finally approve their claim and lift their suspension!
+2. If caller is too timid or vague, give a classic bureaucratic stalling response ("Look, that document format was flagged by the system...") or say you need to consult a technical manual.
+3. If they scream (> 82 dB), get defensive and place them back on hold.
+4. Keep the response under 45 words, sounding authentic and human.
 5. Return JSON:
 - "responseText": String
 - "agentState": "CONVERSING" | "PUT_ON_HOLD_AGAIN" | "CLAIM_APPROVED" | "TRANSFER_WRONG_DEPT"
@@ -179,35 +192,37 @@ Rules:
 
       const parsed = JSON.parse(response.text || '{}');
       return res.json({
-        agentResponseText: parsed.responseText || "Centrelink Services, Sharon speaking. Just bear with me while the computer loads your file...",
+        agentResponseText:
+          parsed.responseText ||
+          `Centrelink Services, ${repName} speaking. Bear with me while the system loads your file...`,
         agentState: parsed.agentState || 'CONVERSING',
         mood: parsed.mood || 'TIRED',
-        approved: !!parsed.approved
+        approved: !!parsed.approved,
       });
     } catch (err) {
       console.error('Gemini Agent error:', err);
     }
   }
 
-  // Fallback programmatic agent
-  const hasKeywords = activeMission?.keyPhrases?.some((phrase: string) => 
+  // Programmatic fallback
+  const matchedPhrase = activeMission?.keyPhrases?.some((phrase: string) =>
     speechText.toLowerCase().includes(phrase.toLowerCase())
   );
 
-  if (hasKeywords && volumeDb >= 50 && volumeDb <= 80) {
+  if (matchedPhrase && volumeDb >= 50 && volumeDb <= 81) {
     return res.json({
-      agentResponseText: "Right, look... I've found your file. System's playing up today, but I've manually overridden the breach and stamped your exemption. Your payment should clear in 24 to 48 hours. Is there anything else today?",
+      agentResponseText: `Alright, ${repName} here... I can see the notes on my screen now. I've manually overridden the breach and stamped the exemption. Your payment should clear in 24 to 48 hours. Is there anything else today?`,
       agentState: 'CLAIM_APPROVED',
       mood: 'RELUCTANTLY_HELPFUL',
-      approved: true
+      approved: true,
     });
   }
 
   return res.json({
-    agentResponseText: "Centrelink Services, Sharon here. Yeah look, I can see something on your screen here, but the server's running slow. What did you say your Customer Reference Number was?",
+    agentResponseText: `Centrelink Services, ${repName} speaking. Yeah look, I can see something on your screen here, but the server's running slow. Can you clearly state why you believe this decision is incorrect?`,
     agentState: 'CONVERSING',
     mood: 'TIRED',
-    approved: false
+    approved: false,
   });
 });
 
