@@ -22,6 +22,8 @@ export interface Mission {
   penaltyNotice: string;
   agency: string;
   targetDepartment: string;
+  menuGuide: string;
+  expectedMenuId: string;
 }
 
 export interface DialogueMessage {

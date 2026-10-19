@@ -20,11 +20,33 @@ class SpeechEngine {
   private isSpeaking: boolean = false;
   private officeFoleyInterval: number | null = null;
   private isSpeakerBoost: boolean = false;
+  private cachedVoices: SpeechSynthesisVoice[] = [];
 
   constructor() {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       this.synth = window.speechSynthesis;
+      this.refreshVoices();
+      if (this.synth.onvoiceschanged !== undefined) {
+        this.synth.onvoiceschanged = () => this.refreshVoices();
+      }
     }
+  }
+
+  private refreshVoices(): void {
+    if (!this.synth) return;
+    try {
+      const v = this.synth.getVoices();
+      if (v && v.length > 0) {
+        this.cachedVoices = v;
+      }
+    } catch {}
+  }
+
+  public getAvailableVoices(): SpeechSynthesisVoice[] {
+    if (this.cachedVoices.length === 0 && this.synth) {
+      this.refreshVoices();
+    }
+    return this.cachedVoices.length > 0 ? this.cachedVoices : (this.synth?.getVoices() || []);
   }
 
   public setSpeakerBoost(enabled: boolean): void {
@@ -52,6 +74,38 @@ class SpeechEngine {
 
       osc.start(now);
       osc.stop(now + 0.13);
+    } catch {
+      // ignore
+    }
+  }
+
+  public playHumanBreath(): void {
+    try {
+      const ctx = getAudioContext();
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+      const now = ctx.currentTime;
+      const bufferSize = Math.floor(ctx.sampleRate * 0.14);
+      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (ctx.sampleRate * 0.06));
+      }
+      const noise = ctx.createBufferSource();
+      noise.buffer = buffer;
+
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(380, now);
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.035, now);
+      gain.gain.linearRampToValueAtTime(0.001, now + 0.14);
+
+      noise.connect(filter);
+      filter.connect(gain);
+      gain.connect(ctx.destination);
+
+      noise.start(now);
     } catch {
       // ignore
     }
@@ -163,6 +217,7 @@ class SpeechEngine {
 
     holdMusic.setDucked(true);
     this.isSpeaking = true;
+    this.playHumanBreath();
     this.startKeyboardTypingFoley();
 
     // Natural conversational formatting: pronounce acronyms phonetically and add natural breathing pauses
@@ -181,66 +236,47 @@ class SpeechEngine {
     this.currentUtterance = utterance;
 
     // Pitch and rate tailored for natural human inflection
-    utterance.rate = voiceOpts?.rate ?? 0.96;
+    utterance.rate = voiceOpts?.rate ?? 0.94;
     utterance.pitch = voiceOpts?.pitch ?? 1.0;
-    utterance.volume = this.isSpeakerBoost ? 1.0 : 0.85;
+    utterance.volume = this.isSpeakerBoost ? 1.0 : 0.88;
 
-    const voices = this.synth.getVoices();
+    const voices = this.getAvailableVoices();
     const hints = voiceOpts?.voiceHints || [];
     const isMale = voiceOpts?.gender === 'male';
 
-    let selectedVoice: SpeechSynthesisVoice | undefined;
+    const scoreVoice = (v: SpeechSynthesisVoice): number => {
+      let score = 0;
+      const nameLower = v.name.toLowerCase();
+      const langLower = v.lang.toLowerCase();
 
-    // Helper: detect premium natural/neural voices
-    const isNatural = (v: SpeechSynthesisVoice) =>
-      /natural|neural|online|enhanced|google|siri|premium|microsoft/i.test(v.name);
+      // Highest bonus for Natural / Neural / Online / Enhanced / Siri / Google
+      if (/natural|neural|online|enhanced|premium/i.test(v.name)) score += 60;
+      if (/google/i.test(v.name)) score += 40;
+      if (/siri/i.test(v.name)) score += 35;
 
-    // 1. Try matching specific representative name/locale hints with natural quality
-    for (const hint of hints) {
-      const match = voices.find(
-        (v) => v.name.toLowerCase().includes(hint.toLowerCase()) && isNatural(v)
-      ) || voices.find((v) => v.name.toLowerCase().includes(hint.toLowerCase()));
-      if (match) {
-        selectedVoice = match;
-        break;
+      // Locale matching:
+      if (langLower.includes('en-au') || langLower.includes('en_au') || nameLower.includes('australia')) score += 45;
+      else if (langLower.includes('en-gb') || langLower.includes('en-uk')) score += 25;
+      else if (langLower.includes('en-us')) score += 15;
+      else if (langLower.startsWith('en')) score += 10;
+
+      // Gender matching
+      if (isMale && /male|russell|lee|david|george|william|guy|ryan|daniel|oliver/i.test(v.name)) score += 30;
+      if (!isMale && /female|karen|catherine|samantha|natasha|sonia|jenny|ava|nicole|veena|priya/i.test(v.name)) score += 30;
+
+      // Hints matching
+      for (const h of hints) {
+        if (nameLower.includes(h.toLowerCase()) || langLower.includes(h.toLowerCase())) score += 40;
       }
-    }
 
-    // 2. Try Australian natural voice first
-    if (!selectedVoice) {
-      const auVoices = voices.filter(
-        (v) => v.lang.includes('en-AU') || v.lang.includes('en_AU') || v.name.includes('Australia')
-      );
-      if (auVoices.length > 0) {
-        if (isMale) {
-          selectedVoice =
-            auVoices.find((v) => isNatural(v) && /male|russell|lee|david|oliver/i.test(v.name)) ||
-            auVoices.find((v) => /male|russell|lee|david/i.test(v.name)) ||
-            auVoices[0];
-        } else {
-          selectedVoice =
-            auVoices.find((v) => isNatural(v) && /female|karen|catherine|samantha|nicole/i.test(v.name)) ||
-            auVoices.find((v) => /female|karen|catherine/i.test(v.name)) ||
-            auVoices[0];
-        }
-      }
-    }
+      // Heavily penalize legacy mechanical voices
+      if (/espeak|compact|bad|scanner|robotic/i.test(nameLower)) score -= 100;
 
-    // 3. Otherwise match natural English voice by gender
-    if (!selectedVoice) {
-      const englishVoices = voices.filter((v) => v.lang.startsWith('en'));
-      if (isMale) {
-        selectedVoice =
-          englishVoices.find((v) => isNatural(v) && /male|george|david|james|daniel|ryan|guy/i.test(v.name)) ||
-          englishVoices.find((v) => /male|george|david|james|daniel/i.test(v.name)) ||
-          englishVoices[0];
-      } else {
-        selectedVoice =
-          englishVoices.find((v) => isNatural(v) && /female|karen|catherine|samantha|ava|jenny|victoria/i.test(v.name)) ||
-          englishVoices.find((v) => /female|karen|catherine|samantha/i.test(v.name)) ||
-          englishVoices[0];
-      }
-    }
+      return score;
+    };
+
+    const sortedVoices = [...voices].sort((a, b) => scoreVoice(b) - scoreVoice(a));
+    const selectedVoice = sortedVoices[0];
 
     if (selectedVoice) {
       utterance.voice = selectedVoice;
