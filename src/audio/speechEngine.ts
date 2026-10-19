@@ -83,7 +83,7 @@ class SpeechEngine {
     // Robotic parameters: slightly faster rate, higher or very flat monotone pitch
     utterance.rate = 1.08;
     utterance.pitch = 0.95;
-    utterance.volume = this.isSpeakerBoost ? 1.0 : 0.65;
+    utterance.volume = this.isSpeakerBoost ? 1.0 : 0.85;
 
     // Pick an English voice
     const voices = this.synth.getVoices();
@@ -165,8 +165,14 @@ class SpeechEngine {
     this.isSpeaking = true;
     this.startKeyboardTypingFoley();
 
-    // Natural pacing: add slight micro-pauses so the human speaker sounds authentic
+    // Natural conversational formatting: pronounce acronyms phonetically and add natural breathing pauses
     const naturalText = text
+      .replace(/\bCRN\b/gi, 'C-R-N')
+      .replace(/\bABN\b/gi, 'A-B-N')
+      .replace(/\bPDF\b/gi, 'P-D-F')
+      .replace(/\bIVR\b/gi, 'I-V-R')
+      .replace(/\bDSP\b/gi, 'D-S-P')
+      .replace(/\$([0-9]+)/g, '$1 dollars')
       .replace(/\.\.\./g, ' — ')
       .replace(/([,;:])\s*/g, '$1 ')
       .trim();
@@ -175,9 +181,9 @@ class SpeechEngine {
     this.currentUtterance = utterance;
 
     // Pitch and rate tailored for natural human inflection
-    utterance.rate = voiceOpts?.rate ?? 0.95;
+    utterance.rate = voiceOpts?.rate ?? 0.96;
     utterance.pitch = voiceOpts?.pitch ?? 1.0;
-    utterance.volume = this.isSpeakerBoost ? 1.0 : 0.65;
+    utterance.volume = this.isSpeakerBoost ? 1.0 : 0.85;
 
     const voices = this.synth.getVoices();
     const hints = voiceOpts?.voiceHints || [];

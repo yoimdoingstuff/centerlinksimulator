@@ -18,8 +18,8 @@ export const holdMusicConfig: HoldMusicConfig = {
   // Tim Carleton's world-famous telephone hold tune: Opus No. 1
   trackTitle: 'Tim Carleton - Opus No. 1 (Default Centrelink Hold Music)',
   audioFileUrl: null,
-  defaultVolume: 0.24,
+  defaultVolume: 0.40,
   enableTelephoneBandpassFilter: true,
   filterCenterFrequency: 1400,
-  duckingMultiplier: 0.18,
+  duckingMultiplier: 0.20,
 };

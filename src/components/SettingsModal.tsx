@@ -62,12 +62,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           </button>
         </div>
 
-        {/* Section 1: Gemini API Key for GitHub Pages */}
+        {/* Section 1: Gemini API Key */}
         <div className="space-y-3 mb-5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold flex items-center gap-1.5 text-slate-900 dark:text-slate-100">
               <Shield className="w-3.5 h-3.5 text-emerald-500" />
-              Gemini API Key (Local & Private)
+              Gemini API Key Configuration
             </span>
             <span
               className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
@@ -80,12 +80,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             </span>
           </div>
 
-          <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed bg-slate-50 dark:bg-slate-950 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
-            <strong>How to keep your key private on GitHub Pages:</strong>
-            <br />
-            Never paste your Gemini API key directly into repository source code or commit it to GitHub!
-            Instead, paste it below: it is saved <em>only</em> inside your local browser&apos;s private storage (<code className="text-blue-500">localStorage</code>) and will never be exposed to anyone else or committed to Git.
-          </p>
+          {/* Guide for Everyone to use on GitHub Pages */}
+          <div className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed bg-slate-50 dark:bg-slate-950 p-3 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2">
+            <div>
+              <strong className="text-slate-800 dark:text-slate-200">Want everyone on your website to use your key?</strong>
+              <p className="mt-1">
+                You can provide a single key for all visitors without exposing it in your git source code:
+              </p>
+              <ol className="list-decimal list-inside mt-1 space-y-0.5 text-slate-600 dark:text-slate-400">
+                <li>In your GitHub repo, go to <strong>Settings</strong> &gt; <strong>Secrets and variables</strong> &gt; <strong>Actions</strong></li>
+                <li>Add a new secret named <code className="text-blue-500 font-mono">GEMINI_API_KEY</code> with your key</li>
+                <li>The deploy workflow will automatically build your key into the site for all visitors!</li>
+              </ol>
+            </div>
+            <div className="pt-1 border-t border-slate-200 dark:border-slate-800">
+              <strong className="text-slate-800 dark:text-slate-200">Or paste your key below for private testing:</strong>
+              <p className="mt-0.5 text-[10px]">
+                Saved securely in this browser&apos;s <code className="text-blue-500">localStorage</code> only.
+              </p>
+            </div>
+          </div>
 
           <div className="space-y-2">
             <div className="relative">

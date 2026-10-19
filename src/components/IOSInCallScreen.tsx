@@ -28,6 +28,9 @@ interface IOSInCallScreenProps {
   screamStrikes?: number;
   screamTimer?: number;
   isScreamImmune?: boolean;
+  holdThreatActive?: boolean;
+  holdThreatSecondsLeft?: number;
+  onProtestHoldThreat?: () => void;
   onHangUp: () => void;
   onKeypadPress: (key: string) => void;
   onToggleMic: () => void;
@@ -45,6 +48,9 @@ export const IOSInCallScreen: React.FC<IOSInCallScreenProps> = ({
   screamStrikes = 0,
   screamTimer = 0,
   isScreamImmune = false,
+  holdThreatActive = false,
+  holdThreatSecondsLeft = 0,
+  onProtestHoldThreat,
   onHangUp,
   onKeypadPress,
   onToggleMic,
@@ -130,6 +136,41 @@ export const IOSInCallScreen: React.FC<IOSInCallScreenProps> = ({
           {subtitleText}
         </p>
       </div>
+
+      {/* 6-Second Hold Threat Emergency Alert */}
+      {holdThreatActive && (
+        <div className="w-full max-w-[310px] mb-3 bg-red-600/90 border border-yellow-300/80 text-white p-3 rounded-2xl shadow-2xl animate-pulse backdrop-blur-md text-center">
+          <div className="flex items-center justify-center gap-1.5 text-xs font-black uppercase tracking-wider mb-1 text-yellow-300">
+            <AlertTriangle className="w-4 h-4 text-yellow-300" />
+            <span>⚠️ THREATENING TO PUT YOU ON HOLD!</span>
+          </div>
+          <p className="text-[11px] leading-tight mb-2 text-white/95">
+            You have <strong className="text-yellow-300 text-sm font-mono">{holdThreatSecondsLeft}s</strong> to speak up, protest, or yell: <br />
+            <span className="italic font-bold text-yellow-200">&quot;Wait, don&apos;t put me on hold!&quot;</span>
+          </p>
+          <div className="w-full bg-black/40 rounded-full h-2 mb-2 overflow-hidden border border-white/20">
+            <div
+              className="bg-yellow-400 h-full transition-all duration-1000 ease-linear rounded-full"
+              style={{ width: `${Math.max(0, (holdThreatSecondsLeft / 6) * 100)}%` }}
+            />
+          </div>
+          <button
+            type="button"
+            onClick={onProtestHoldThreat}
+            className="w-full py-2 px-3 rounded-xl bg-yellow-400 hover:bg-yellow-300 text-slate-950 font-black text-xs transition active:scale-95 shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <span>Wait! Don&apos;t put me on hold!</span>
+          </button>
+        </div>
+      )}
+
+      {/* Speakerphone High Volume Indicator */}
+      {isSpeakerBoost && (
+        <div className="w-full max-w-[310px] mb-2 px-3 py-1 rounded-full bg-emerald-500/25 border border-emerald-400/40 backdrop-blur-md flex items-center justify-center gap-1.5 text-[11px] text-emerald-200 shadow-sm animate-in fade-in duration-150">
+          <Volume2 className="w-3.5 h-3.5 text-emerald-300" />
+          <span className="font-semibold">Speakerphone: Boosted Volume (+240%)</span>
+        </div>
+      )}
 
       {/* Scream / Hostility Strikes Warning Banner */}
       {screamStrikes > 0 && (

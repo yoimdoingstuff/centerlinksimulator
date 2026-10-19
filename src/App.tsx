@@ -87,6 +87,17 @@ export default function App() {
   const [screamTimer, setScreamTimer] = useState<number>(0);
   const [isScreamImmune, setIsScreamImmune] = useState<boolean>(false);
 
+  // 6-Second Hold Threat Mechanic (Representative threatens to put caller on hold)
+  const [holdThreatActive, setHoldThreatActive] = useState<boolean>(false);
+  const [holdThreatSecondsLeft, setHoldThreatSecondsLeft] = useState<number>(0);
+  const holdThreatActiveRef = useRef<boolean>(false);
+  const holdThreatIntervalRef = useRef<number | null>(null);
+  const hasTriggeredHoldThreatRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    holdThreatActiveRef.current = holdThreatActive;
+  }, [holdThreatActive]);
+
   // Timing & Telemetry
   const [callSeconds, setCallSeconds] = useState<number>(0);
   const [queuePos, setQueuePos] = useState<number>(50);
@@ -349,11 +360,18 @@ export default function App() {
     setMissionIndex(Math.floor(Math.random() * MISSIONS.length));
     setCurrentRepresentative(getRandomRepresentative());
 
-    // Reset hostility strikes and cooldowns
+    // Reset hostility strikes, cooldowns, and hold threats
     setScreamStrikes(0);
     setScreamTimer(0);
     screamCooldownUntilRef.current = 0;
     lastQueueAnnouncementSecRef.current = 0;
+    setHoldThreatActive(false);
+    setHoldThreatSecondsLeft(0);
+    hasTriggeredHoldThreatRef.current = false;
+    if (holdThreatIntervalRef.current) {
+      clearInterval(holdThreatIntervalRef.current);
+      holdThreatIntervalRef.current = null;
+    }
 
     // Unlock Web Audio & SpeechSynthesis immediately on user click gesture
     const ctx = getAudioContext();
@@ -486,7 +504,96 @@ export default function App() {
     if (ringCancelRef.current) ringCancelRef.current();
     setCallStatus('IDLE');
     setSignalDots(5);
+    setHoldThreatActive(false);
+    setHoldThreatSecondsLeft(0);
+    if (holdThreatIntervalRef.current) {
+      clearInterval(holdThreatIntervalRef.current);
+      holdThreatIntervalRef.current = null;
+    }
     addMessage('SYSTEM', 'Call disconnected.');
+  };
+
+  // 6-Second Hold Threat Mechanic: Representative threatens to put caller on hold
+  const triggerHoldThreat = () => {
+    hasTriggeredHoldThreatRef.current = true;
+    const rep = currentRepresentative;
+    const voiceOpts = {
+      gender: rep.gender,
+      pitch: rep.pitch,
+      rate: rep.rate,
+      voiceHints: rep.voiceHints,
+    };
+
+    const threatLines = [
+      `Look mate, the mainframe terminal is locking up on my end. I'm going to have to put you back on hold while I check the policy manual.`,
+      `Hang on, our regional database server is timing out. I'm going to put you back in the queue while I clear this error code.`,
+      `I can't seem to locate that document in the system. Hold the line, I'm transferring you back into the general queue right now.`
+    ];
+    const threatMsg = threatLines[Math.floor(Math.random() * threatLines.length)];
+
+    addMessage('AGENT', threatMsg);
+    speechEngine.speakRepresentative(threatMsg, voiceOpts, () => {
+      triggerHaptic('error');
+      setHoldThreatActive(true);
+      setHoldThreatSecondsLeft(6);
+
+      if (holdThreatIntervalRef.current) {
+        clearInterval(holdThreatIntervalRef.current);
+      }
+
+      holdThreatIntervalRef.current = window.setInterval(() => {
+        setHoldThreatSecondsLeft((prev) => {
+          if (prev <= 1) {
+            // 6 seconds expired without user speaking or protesting!
+            if (holdThreatIntervalRef.current) {
+              clearInterval(holdThreatIntervalRef.current);
+              holdThreatIntervalRef.current = null;
+            }
+            setHoldThreatActive(false);
+            const putOnHoldMsg = `Right, you didn't say anything. Placing you back on hold now...`;
+            addMessage('AGENT', putOnHoldMsg);
+            speechEngine.speakRepresentative(putOnHoldMsg, voiceOpts, () => {
+              enterHoldQueue(`${rep.name} placed you back on hold after you didn't speak up in time...`);
+            });
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+      if (isMicActive) micAnalyzer.startListening();
+    });
+  };
+
+  const handleProtestHoldThreat = () => {
+    if (!holdThreatActiveRef.current) return;
+    if (holdThreatIntervalRef.current) {
+      clearInterval(holdThreatIntervalRef.current);
+      holdThreatIntervalRef.current = null;
+    }
+    setHoldThreatActive(false);
+    triggerHaptic('heavy');
+
+    const rep = currentRepresentative;
+    const voiceOpts = {
+      gender: rep.gender,
+      pitch: rep.pitch,
+      rate: rep.rate,
+      voiceHints: rep.voiceHints,
+    };
+
+    const relentLines = [
+      `Alright, alright! Don't yell at me mate, fair dinkum! I'll stay on the line and check it right now without putting you on hold. What were you saying?`,
+      `Alright, settle down, no need to shout! I will keep the line connected and manually override the screen. Tell me what happened.`,
+      `Fair enough, calm down mate! I won't put you on hold, I'll give you another chance. Talk to me.`,
+      `Okay, okay, don't stress! I'll stay on the line with you. Go on and explain your dispute.`
+    ];
+    const relentMsg = relentLines[Math.floor(Math.random() * relentLines.length)];
+
+    addMessage('AGENT', relentMsg);
+    speechEngine.speakRepresentative(relentMsg, voiceOpts, () => {
+      if (isMicActive) micAnalyzer.startListening();
+    });
   };
 
   // Panic redial when line drops
@@ -552,6 +659,13 @@ export default function App() {
     const transcript = result.transcript.trim();
     const textLower = transcript.toLowerCase();
     addMessage('USER', transcript, result.peakDb);
+
+    // 0. Hold Threat Defense: If representative threatened to put caller on hold within 6 seconds,
+    // speaking, shouting, or screaming stops them from putting you on hold and forces them to stay on the line!
+    if (holdThreatActiveRef.current) {
+      handleProtestHoldThreat();
+      return;
+    }
 
     // 1. Severe Offensive & Abusive Keywords Check -> Immediate Call Termination
     const OFFENSIVE_KEYWORDS = [
@@ -801,10 +915,8 @@ export default function App() {
             if (data.approved) {
               setCallStatus('VICTORY');
               setShowVictory(true);
-            } else if (data.agentState === 'PUT_ON_HOLD_AGAIN') {
-              enterHoldQueue(
-                `${rep.name} has placed you on hold while consulting with a senior technical specialist...`
-              );
+            } else if (data.agentState === 'PUT_ON_HOLD_AGAIN' || (!hasTriggeredHoldThreatRef.current && Math.random() < 0.45)) {
+              triggerHoldThreat();
             } else if (isMicActive) {
               micAnalyzer.startListening();
             }
@@ -829,10 +941,8 @@ export default function App() {
             if (clientRes.approved) {
               setCallStatus('VICTORY');
               setShowVictory(true);
-            } else if (clientRes.agentState === 'PUT_ON_HOLD_AGAIN') {
-              enterHoldQueue(
-                `${rep.name} has placed you on hold while consulting with a senior technical specialist...`
-              );
+            } else if (clientRes.agentState === 'PUT_ON_HOLD_AGAIN' || (!hasTriggeredHoldThreatRef.current && Math.random() < 0.45)) {
+              triggerHoldThreat();
             } else if (isMicActive) {
               micAnalyzer.startListening();
             }
@@ -865,6 +975,10 @@ export default function App() {
           setShowVictory(true);
         });
       } else {
+        if (!hasTriggeredHoldThreatRef.current && Math.random() < 0.5) {
+          triggerHoldThreat();
+          return;
+        }
         const stallMsg =
           rep.stallResponses[Math.floor(Math.random() * rep.stallResponses.length)];
         addMessage('AGENT', stallMsg);
@@ -1070,6 +1184,9 @@ export default function App() {
             screamStrikes={screamStrikes}
             screamTimer={screamTimer}
             isScreamImmune={isScreamImmune}
+            holdThreatActive={holdThreatActive}
+            holdThreatSecondsLeft={holdThreatSecondsLeft}
+            onProtestHoldThreat={handleProtestHoldThreat}
             onHangUp={handleHangUp}
             onKeypadPress={handleKeypadPress}
             onToggleMic={handleToggleMic}
@@ -1079,6 +1196,8 @@ export default function App() {
             dialedNumber={dialedNumber}
             onNumberChange={setDialedNumber}
             onCall={handleDial}
+            activeMission={activeMission}
+            onShuffleMission={handleShuffleMission}
           />
         )}
       </main>

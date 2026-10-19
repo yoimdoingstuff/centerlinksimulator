@@ -1,15 +1,20 @@
 import { GoogleGenAI } from '@google/genai';
 import { Representative } from './representatives';
 import { Mission } from '../types/game';
+import { getSiteWideApiKey } from '../config/geminiConfig';
 
 const STORAGE_KEY = 'centrelink_gemini_api_key';
 
 export function getStoredApiKey(): string {
   try {
-    return localStorage.getItem(STORAGE_KEY) || import.meta.env.VITE_GEMINI_API_KEY || '';
-  } catch {
-    return import.meta.env.VITE_GEMINI_API_KEY || '';
-  }
+    const local = localStorage.getItem(STORAGE_KEY);
+    if (local && local.trim().length > 10) return local.trim();
+  } catch {}
+  return getSiteWideApiKey();
+}
+
+export function isSiteWideKeyActive(): boolean {
+  return !!getSiteWideApiKey();
 }
 
 let clientAi: GoogleGenAI | null = null;
@@ -121,8 +126,9 @@ export async function generateClientAgent(params: {
     const rep = params.representative;
     const response = await clientAi.models.generateContent({
       model: 'gemini-3.8-flash',
-      contents: `You are "${rep.name}", a Centrelink ${rep.title} in Australia.
+      contents: `You are "${rep.name}", a human Centrelink ${rep.title} in Australia.
 Heritage & Tone: ${rep.heritage}.
+CRITICAL PERSONALITY INSTRUCTION: You are a real Australian human working in an overburdened call centre. You NEVER speak like a bot, automated assistant, or AI. Use natural conversational Australian speech with realistic hesitations, sighs, colloquialisms ('look mate', 'rightio', 'hang on a sec', 'fair enough', 'yeah no worries'), and typing pauses.
 Player Mission: "${params.activeMission.title} - ${params.activeMission.description}".
 Required Key Mission Concepts: "${params.activeMission.keyPhrases.join(', ')}".
 Caller Loudness: ${params.volumeDb} dB.
@@ -131,10 +137,10 @@ Hold time endured: ${params.holdTimeSeconds}s.
 Current Scream Warning Strikes: ${params.screamStrikes || 0}/6.
 
 Strict Assessment Rules:
-1. If caller makes random noises, mumbling, coughing, or says things with NO relation to the mission keywords, DO NOT approve! In character, ask them what on earth they mean and ask for their actual reason.
+1. If caller makes random noises, mumbling, coughing, or says things with NO relation to the mission keywords, DO NOT approve! In character as a bewildered or tired human agent, tell them that made no sense and ask what's actually gone wrong with their paperwork or appointment.
 2. If caller is screaming (> 82 dB), do NOT immediately hang up unless at strike 6; instead, try to calm them down in your distinct Australian personality.
 3. If caller explains with firm clarity (52-80 dB) and articulates the key facts of their dispute (e.g. medical cert, provider scanner down, casual earnings), APPROVE the claim and wipe the penalty!
-4. Keep response under 45 words in authentic Australian call centre colloquialisms.
+4. Keep response concise (under 45 words), sounding like a genuine human Australian officer.
 5. Format strictly as JSON with keys: "responseText", "approved" (boolean), "agentState" ("CONVERSING" | "CLAIM_APPROVED" | "PUT_ON_HOLD_AGAIN").`,
       config: {
         responseMimeType: 'application/json',

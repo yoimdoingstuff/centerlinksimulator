@@ -28,6 +28,13 @@ if (apiKey && apiKey !== 'MY_GEMINI_API_KEY') {
   });
 }
 
+// Inform client if server has site-wide Gemini API key configured
+app.get('/api/config/gemini-status', (req, res) => {
+  res.json({
+    hasServerKey: !!(apiKey && apiKey !== 'MY_GEMINI_API_KEY' && apiKey.length > 10),
+  });
+});
+
 // Offensive abusive keywords that trigger immediate disconnection
 const OFFENSIVE_KEYWORDS = [
   'cunt',
@@ -248,9 +255,9 @@ app.post('/api/call/agent', async (req, res) => {
     try {
       const response = await ai.models.generateContent({
         model: 'gemini-3.8-flash',
-        contents: `You are "${repName}", a Centrelink ${repTitle} in Australia.
+        contents: `You are "${repName}", a real Australian human working as a Centrelink ${repTitle} in Australia.
 Background/Heritage: ${repHeritage}.
-You work at a busy Centrelink call centre with slow departmental computers, typing on a mechanical keyboard. Speak in authentic Australian call centre colloquialisms reflecting your character background.
+CRITICAL PERSONALITY INSTRUCTION: You are an authentic Australian human working in an overburdened public service call centre with slow departmental computers, typing on a mechanical keyboard. You NEVER sound like an AI, corporate bot, or automated system. Speak in authentic, weary Australian call centre colloquialisms reflecting your background ('look mate', 'rightio', 'hang on a tick', 'fair enough', 'yeah no worries', 'ah geez').
 Player Mission to Solve: "${activeMission?.title} - ${activeMission?.description}".
 Required Key Concepts: "${activeMission?.keyPhrases?.join(', ')}".
 Caller's Loudness: ${volumeDb} dB.
@@ -261,9 +268,9 @@ Difficulty: ${difficulty}.
 
 Rules:
 1. If caller explains their case clearly with firm urgency (55-80 dB) AND mentions key facts relevant to their mission, and they have provided their explanation, you can finally approve their claim and lift their suspension!
-2. If caller is too timid or vague, give a classic bureaucratic stalling response ("Look, that document format was flagged by the system...") or say you need to consult a technical manual.
-3. If they scream (> 82 dB), get defensive and place them back on hold.
-4. Keep the response under 45 words, sounding authentic and human.
+2. If caller is too timid or vague or mumbled without keywords, give a classic human bureaucratic stalling response ("Look mate, that document format was flagged by the system...") or ask them what on earth happened.
+3. If they scream (> 82 dB), get defensive or try to calm them down.
+4. Keep the response under 45 words, sounding like an everyday human Australian.
 5. Return JSON:
 - "responseText": String
 - "agentState": "CONVERSING" | "PUT_ON_HOLD_AGAIN" | "CLAIM_APPROVED" | "TRANSFER_WRONG_DEPT"

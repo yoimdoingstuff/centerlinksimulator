@@ -77,7 +77,8 @@ class HoldMusicController {
         this.filterNode.connect(ctx.destination);
       }
 
-      const baseVol = holdMusicConfig.defaultVolume;
+      const boostMultiplier = this.isSpeakerBoost ? 2.4 : 1.0;
+      const baseVol = Math.min(1.0, holdMusicConfig.defaultVolume * boostMultiplier);
       this.masterGain.gain.setValueAtTime(
         this.isDucked ? baseVol * holdMusicConfig.duckingMultiplier : baseVol,
         ctx.currentTime
@@ -99,9 +100,12 @@ class HoldMusicController {
         const audioUrl = candidateUrls[0];
         const audio = new Audio(audioUrl);
         audio.loop = true;
-        audio.volume = this.isDucked
-          ? baseVol * holdMusicConfig.duckingMultiplier
-          : baseVol;
+        audio.volume = Math.min(
+          1.0,
+          this.isDucked
+            ? baseVol * holdMusicConfig.duckingMultiplier
+            : baseVol
+        );
 
         const fallbackToSynth = () => {
           if (!didStartAudio && this.isPlaying && !this.synthInterval) {

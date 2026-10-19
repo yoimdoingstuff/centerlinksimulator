@@ -1,13 +1,16 @@
 import React from 'react';
-import { Phone, Delete } from 'lucide-react';
+import { Phone, Delete, Shuffle } from 'lucide-react';
 import { playDTMFTone } from '../audio/dtmf';
 import { triggerHaptic } from '../utils/haptics';
+import { Mission } from '../types/game';
 
 interface IOSKeypadProps {
   dialedNumber: string;
   onNumberChange: (num: string) => void;
   onCall: () => void;
   onKeyPress?: (key: string) => void;
+  activeMission?: Mission;
+  onShuffleMission?: () => void;
 }
 
 export const IOSKeypad: React.FC<IOSKeypadProps> = ({
@@ -15,6 +18,8 @@ export const IOSKeypad: React.FC<IOSKeypadProps> = ({
   onNumberChange,
   onCall,
   onKeyPress,
+  activeMission,
+  onShuffleMission,
 }) => {
   const handleButtonPress = (key: string) => {
     triggerHaptic('light');
@@ -72,6 +77,29 @@ export const IOSKeypad: React.FC<IOSKeypadProps> = ({
         <span className="text-xs text-white/80 font-medium tracking-wide drop-shadow-xs">
           Centrelink (132 850)
         </span>
+        {activeMission && (
+          <div className="mt-2.5 w-full max-w-[280px] bg-black/25 backdrop-blur-md rounded-2xl px-3 py-1.5 border border-white/20 flex items-center justify-between gap-2 shadow-xs">
+            <div className="flex-1 text-left min-w-0">
+              <span className="text-[9px] uppercase tracking-wider font-semibold text-white/60 block leading-tight">
+                Calling About:
+              </span>
+              <span className="text-[11px] font-medium text-white/95 truncate block">
+                {activeMission.title}
+              </span>
+            </div>
+            {onShuffleMission && (
+              <button
+                type="button"
+                onClick={onShuffleMission}
+                className="px-2 py-1 rounded-full bg-white/20 hover:bg-white/30 text-[10px] text-white flex items-center gap-1 transition cursor-pointer shrink-0 font-medium active:scale-95"
+                title="Switch dispute reason"
+              >
+                <Shuffle className="w-3 h-3" />
+                <span>Shuffle</span>
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* iOS 7 Circular Passcode-Style Keypad Grid */}
