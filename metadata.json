@@ -1,0 +1,6 @@
+{
+  "name": "Centrelink Call Simulator",
+  "description": "Navigate the endless Services Australia phone queue, scream at a useless automated robocaller to reach a human representative, and survive hold music before the line drops.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
