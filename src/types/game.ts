@@ -32,6 +32,7 @@ export interface DialogueMessage {
   text: string;
   timestamp: number;
   volumeDb?: number;
+  isAiPowered?: boolean;
 }
 
 export interface CallStats {

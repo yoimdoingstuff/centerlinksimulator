@@ -48,7 +48,7 @@ import {
   Representative,
   getRandomRepresentative,
 } from './utils/representatives';
-import { generateClientIVR, generateClientAgent } from './utils/geminiClient';
+import { generateClientIVR, generateClientAgent, hasClientGeminiKey } from './utils/geminiClient';
 
 export default function App() {
   // Wallpaper state (randomized colorful blurred wallpaper)
@@ -62,6 +62,7 @@ export default function App() {
   const [difficulty, setDifficulty] = useState<Difficulty>('NORMAL');
   const [callStatus, setCallStatus] = useState<CallStatus>('IDLE');
   const [currentMenuId, setCurrentMenuId] = useState<string>('MAIN_MENU');
+  const [currentDepartment, setCurrentDepartment] = useState<string>('JobSeeker & Mutual Obligations');
   const [messages, setMessages] = useState<DialogueMessage[]>([]);
   const [currentMenuPrompt, setCurrentMenuPrompt] = useState<string>('');
 
@@ -287,12 +288,22 @@ export default function App() {
     setCurrentWallpaper(IOS_WALLPAPERS[nextIndex]);
   };
 
-  // Shuffle mission reason so it's not always the same!
+  // Shuffle mission reason so it's not always the same! (Blocked mid-call)
   const handleShuffleMission = () => {
+    if (callStatus !== 'IDLE' && callStatus !== 'CALL_ENDED' && callStatus !== 'VICTORY') return;
     triggerHaptic('selection');
     setMissionIndex((prev) => (prev + 1) % MISSIONS.length);
     const nextM = MISSIONS[(missionIndex + 1) % MISSIONS.length];
     addMessage('SYSTEM', `Calling reason switched to: "${nextM.title}"`);
+  };
+
+  // Select a specific mission reason from drawer or list (Blocked mid-call)
+  const handleSelectMission = (idx: number) => {
+    if (callStatus !== 'IDLE' && callStatus !== 'CALL_ENDED' && callStatus !== 'VICTORY') return;
+    triggerHaptic('selection');
+    setMissionIndex(idx % MISSIONS.length);
+    const selectedM = MISSIONS[idx % MISSIONS.length];
+    addMessage('SYSTEM', `Calling reason selected: "${selectedM.title}"`);
   };
 
   // Drag-and-drop listener to easily drop an MP3 into the browser
@@ -334,11 +345,12 @@ export default function App() {
     }
   };
 
-  // Helper to add dialogue message
+  // Helper to add dialogue message with optional AI Powered indicator
   const addMessage = (
     sender: 'USER' | 'ROBOCALLER' | 'AGENT' | 'SYSTEM',
     text: string,
-    vol?: number
+    vol?: number,
+    isAiPowered?: boolean
   ) => {
     setMessages((prev) => [
       ...prev,
@@ -348,6 +360,7 @@ export default function App() {
         text,
         timestamp: Date.now(),
         volumeDb: vol,
+        isAiPowered,
       },
     ]);
   };
@@ -356,9 +369,9 @@ export default function App() {
   const handleDial = () => {
     triggerHaptic('heavy');
 
-    // Pick a fresh random mission reason and fresh representative on every call!
-    setMissionIndex(Math.floor(Math.random() * MISSIONS.length));
+    // Fresh representative on every call; preserve user's chosen mission!
     setCurrentRepresentative(getRandomRepresentative());
+    setCurrentDepartment(activeMission.targetDepartment);
 
     // Reset hostility strikes, cooldowns, and hold threats
     setScreamStrikes(0);
@@ -625,6 +638,13 @@ export default function App() {
       addMessage('USER', `Pressed ${key}: ${option.label}`);
       setLoopsSurvived((prev) => prev + 1);
 
+      if (currentMenuId === 'MAIN_MENU') {
+        if (key === '1') setCurrentDepartment('JobSeeker & Mutual Obligations');
+        else if (key === '2') setCurrentDepartment('Age Pension & Carer Support');
+        else if (key === '3') setCurrentDepartment('Concession Cards & Rent Assistance');
+        else if (key === '4') setCurrentDepartment('Income Reporting & Employment Separation');
+      }
+
       if (option.action === 'HOLD_QUEUE') {
         enterHoldQueue();
       } else if (option.action === 'SUBMENU' && option.targetMenu) {
@@ -869,7 +889,7 @@ export default function App() {
         });
       }
     } else if (callStatus === 'AGENT_TALKING') {
-      // 4. Human Representative Dialogue with Mission Keyword Verification
+      // 4. Human Representative Dialogue with Dynamic AI & Offline Conversational Engine
       const rep = currentRepresentative;
       const voiceOpts = {
         gender: rep.gender,
@@ -878,20 +898,60 @@ export default function App() {
         voiceHints: rep.voiceHints,
       };
 
-      const matchedPhrase = activeMission.keyPhrases.some((phrase) =>
-        textLower.includes(phrase.toLowerCase())
-      );
+      // Check if user reached the WRONG department:
+      const isWrongDepartment =
+        currentDepartment &&
+        currentDepartment !== 'General Services' &&
+        currentDepartment !== activeMission.targetDepartment;
 
-      const generalRelevantKeywords = [
-        'medical', 'doctor', 'certificate', 'pdf', 'scanner', 'fingerprint',
-        'attended', 'casual', 'earnings', 'bar', 'cousin', 'dubbo', 'unlink',
-        'austudy', 'study load', 'carer', 'mother', 'review', 'dsp', 'disability',
-        'points', 'impairment', 'rent', 'lease', 'periodic', 'mygov', 'exemption',
-        'appointment', 'breach', 'hours', 'separation', 'compliance'
-      ];
-      const hasRelevantTopic = matchedPhrase || generalRelevantKeywords.some((kw) => textLower.includes(kw));
+      if (isWrongDepartment) {
+        // Representative notices caller is in the wrong department and transfers them to the queue they need!
+        const wrongDeptMsg = `Whoa, hold on mate! You've come through to ${currentDepartment}, but looking at your CRN, your case needs ${activeMission.targetDepartment}. Don't hang up, I'm transferring your call straight over to the correct department queue now!`;
+        addMessage('AGENT', wrongDeptMsg, undefined, false);
+        setCurrentDepartment(activeMission.targetDepartment);
+        speechEngine.speakRepresentative(wrongDeptMsg, voiceOpts, () => {
+          enterHoldQueue(`Transferred to ${activeMission.targetDepartment} queue...`);
+        });
+        return;
+      }
 
-      // Try server API first
+      // 1. Try Client Gemini AI first if API key is loaded
+      if (hasClientGeminiKey()) {
+        try {
+          const clientRes = await generateClientAgent({
+            speechText: transcript,
+            volumeDb: result.peakDb,
+            activeMission,
+            representative: rep,
+            holdTimeSeconds: callSeconds,
+            difficulty,
+            screamStrikes,
+            currentDepartment,
+          });
+
+          if (clientRes && clientRes.agentResponseText) {
+            addMessage('AGENT', clientRes.agentResponseText, undefined, true);
+            speechEngine.speakRepresentative(clientRes.agentResponseText, voiceOpts, () => {
+              if (clientRes.agentState === 'TRANSFER_WRONG_DEPT') {
+                setCurrentDepartment(activeMission.targetDepartment);
+                enterHoldQueue(`Transferred to ${activeMission.targetDepartment} queue...`);
+              } else if (clientRes.approved) {
+                setCallStatus('VICTORY');
+                setShowVictory(true);
+              } else if (clientRes.agentState === 'PUT_ON_HOLD_AGAIN' || (!hasTriggeredHoldThreatRef.current && Math.random() < 0.38)) {
+                triggerHoldThreat();
+              } else if (isMicActive) {
+                micAnalyzer.startListening();
+              }
+            });
+            return;
+          }
+        } catch (e) {
+          console.warn('Client Gemini call failed, falling back...', e);
+        }
+      }
+
+      // 2. Try Server Gemini API
       try {
         const res = await fetch('/api/call/agent', {
           method: 'POST',
@@ -905,87 +965,99 @@ export default function App() {
             holdTimeSeconds: callSeconds,
             difficulty,
             screamStrikes,
+            currentDepartment,
           }),
         });
 
         if (res.ok) {
           const data = await res.json();
-          addMessage('AGENT', data.agentResponseText);
-          speechEngine.speakRepresentative(data.agentResponseText, voiceOpts, () => {
-            if (data.approved) {
-              setCallStatus('VICTORY');
-              setShowVictory(true);
-            } else if (data.agentState === 'PUT_ON_HOLD_AGAIN' || (!hasTriggeredHoldThreatRef.current && Math.random() < 0.45)) {
-              triggerHoldThreat();
-            } else if (isMicActive) {
-              micAnalyzer.startListening();
-            }
-          });
-          return;
+          if (data && data.agentResponseText) {
+            addMessage('AGENT', data.agentResponseText, undefined, !!data.isAiPowered);
+            speechEngine.speakRepresentative(data.agentResponseText, voiceOpts, () => {
+              if (data.agentState === 'TRANSFER_WRONG_DEPT') {
+                setCurrentDepartment(activeMission.targetDepartment);
+                enterHoldQueue(`Transferred to ${activeMission.targetDepartment} queue...`);
+              } else if (data.approved) {
+                setCallStatus('VICTORY');
+                setShowVictory(true);
+              } else if (data.agentState === 'PUT_ON_HOLD_AGAIN' || (!hasTriggeredHoldThreatRef.current && Math.random() < 0.38)) {
+                triggerHoldThreat();
+              } else if (isMicActive) {
+                micAnalyzer.startListening();
+              }
+            });
+            return;
+          }
         }
-      } catch {
-        // try client-side Gemini fallback for static GitHub Pages
-        const clientRes = await generateClientAgent({
-          speechText: transcript,
-          volumeDb: result.peakDb,
-          activeMission,
-          representative: rep,
-          holdTimeSeconds: callSeconds,
-          difficulty,
-          screamStrikes,
-        });
-
-        if (clientRes) {
-          addMessage('AGENT', clientRes.agentResponseText);
-          speechEngine.speakRepresentative(clientRes.agentResponseText, voiceOpts, () => {
-            if (clientRes.approved) {
-              setCallStatus('VICTORY');
-              setShowVictory(true);
-            } else if (clientRes.agentState === 'PUT_ON_HOLD_AGAIN' || (!hasTriggeredHoldThreatRef.current && Math.random() < 0.45)) {
-              triggerHoldThreat();
-            } else if (isMicActive) {
-              micAnalyzer.startListening();
-            }
-          });
-          return;
-        }
+      } catch (err) {
+        console.warn('Server agent call error', err);
       }
 
-      // Offline programmatic keyword checking:
-      // If user made random noise or mumbled gibberish without keywords, do NOT approve!
-      if (!hasRelevantTopic || textLower.length < 4) {
-        const confusionMsg =
-          rep.gender === 'male'
-            ? `Mate, that didn't make a lick of sense. Speak up clearly—what's the actual story with your documentation or provider?`
-            : `I'm sorry, I could not understand that. Please state clearly the reason for your compliance dispute so I can check your file.`;
-        addMessage('AGENT', confusionMsg);
-        speechEngine.speakRepresentative(confusionMsg, voiceOpts, () => {
-          if (isMicActive) micAnalyzer.startListening();
-        });
-        return;
-      }
+      // 3. Ultra-Dynamic Offline Human Conversational Engine:
+      // Responds naturally to literally ANYTHING the caller says!
+      const matchedPhrase = activeMission.keyPhrases.some((phrase) =>
+        textLower.includes(phrase.toLowerCase())
+      );
 
-      // If user articulated key mission phrases with firm volume (50-81 dB): APPROVE!
+      // (A) Did caller explain and justify their case clearly?
       if (matchedPhrase && result.peakDb >= 50 && result.peakDb <= 81) {
-        const winMsg =
-          rep.approvalResponses[Math.floor(Math.random() * rep.approvalResponses.length)];
-        addMessage('AGENT', winMsg);
+        const winLines = [
+          `Rightio mate, I see the documentation notes on my terminal now. I have manually overridden the system suspension and cleared the demerit. Your payment should process in 24 to 48 hours. You are all sorted!`,
+          `Fair dinkum, thanks for explaining that clearly. I've stamped the medical exemption and lifted the compliance breach. You won't be penalized for that. Have a good one!`,
+          `Yeah look, that makes total sense. Our automated system shouldn't have flagged that in the first place. I've re-linked your record and released the held funds. All done!`,
+        ];
+        const winMsg = winLines[Math.floor(Math.random() * winLines.length)];
+        addMessage('AGENT', winMsg, undefined, false);
         speechEngine.speakRepresentative(winMsg, voiceOpts, () => {
           setCallStatus('VICTORY');
           setShowVictory(true);
         });
-      } else {
-        if (!hasTriggeredHoldThreatRef.current && Math.random() < 0.5) {
-          triggerHoldThreat();
-          return;
-        }
-        const stallMsg =
-          rep.stallResponses[Math.floor(Math.random() * rep.stallResponses.length)];
-        addMessage('AGENT', stallMsg);
-        speechEngine.speakRepresentative(stallMsg, voiceOpts, () => {
-          if (isMicActive) micAnalyzer.startListening();
-        });
+        return;
       }
+
+      // (B) Natural multi-topic conversational responses to whatever user says:
+      let dynamicReply = '';
+
+      if (textLower.includes('hold') || textLower.includes('music') || textLower.includes('hours') || textLower.includes('waiting') || textLower.includes('forever')) {
+        const holdBanter = [
+          `Mate, I hear you. That Opus No. 1 synthesizer tune plays in my nightmares every single night. 45 minutes on hold is actually quick for a weekday morning! What can I help you sort out?`,
+          `Yeah look, I know. Our call wait times are bloody ridiculous today, we're down four staff members in the regional office. Tell me what happened with your file.`,
+          `Tell me about it! I wish management would let us change that synthesizer track to Cold Chisel or something. Anyway, talk to me—what's the dispute?`,
+        ];
+        dynamicReply = holdBanter[Math.floor(Math.random() * holdBanter.length)];
+      } else if (textLower.includes('hello') || textLower.includes('hi') || textLower.includes('gday') || textLower.includes("g'day") || textLower.includes('morning') || textLower.includes('afternoon') || textLower.includes('how are you')) {
+        const greetings = [
+          `G'day mate! I'm doing alright, running on my third cup of instant Blend 43 coffee. System's crawling, but I'm here. What's going on with your Centrelink file?`,
+          `Howdy. Surviving, thanks for asking! Trying to get through this stack of compliance reviews before 5pm. What can I look up for you?`,
+          `G'day, ${rep.name} here. Not too bad mate, just another busy day in the public service. How can I help sort your dispute?`,
+        ];
+        dynamicReply = greetings[Math.floor(Math.random() * greetings.length)];
+      } else if (textLower.includes('robot') || textLower.includes('ai') || textLower.includes('bot') || textLower.includes('real person') || textLower.includes('human')) {
+        dynamicReply = `Haha, nah mate, I'm real, flesh and blood sitting here at my desk in the service centre! Wish I was a robot, then my back wouldn't ache from these office chairs. What's the story with your case?`;
+      } else if (textLower.includes('money') || textLower.includes('starving') || textLower.includes('rent') || textLower.includes('bills') || textLower.includes('urgent') || textLower.includes('broke')) {
+        dynamicReply = `I understand this is urgent mate, don't stress. Take a breath and explain the exact details of why your payment was suspended so I can log the emergency review notes on your file.`;
+      } else if (textLower.includes('weather') || textLower.includes('rain') || textLower.includes('hot') || textLower.includes('cold')) {
+        dynamicReply = `Mate, don't get me started on the weather! Air conditioning in this government building has been broken since Tuesday. Anyway, let's look at your case—what happened?`;
+      } else if (textLower.includes('fuck') || textLower.includes('shit') || textLower.includes('crap') || textLower.includes('bloody') || textLower.includes('bullshit')) {
+        dynamicReply = `Look mate, I know you're frustrated, and fair enough too—Centrelink systems can be a proper nightmare. But keep it civil with me, and I'll do everything I can to get your payment restored.`;
+      } else {
+        const generalBanter = [
+          `Yeah look, I hear what you're saying. The mainframe is running a bit slow on my end, but I'm typing your notes in now. Can you give me the specific facts about your dispute?`,
+          `Rightio, got that. Bear with me, our departmental software takes a minute to update. Tell me a bit more about what went wrong with the appointment or document.`,
+          `Fair enough mate. Just checking your CRN history here... go on and explain why you think that demerit or suspension shouldn't apply to you.`,
+          `Listen mate, I'm trying to help you sort this out. Speak clearly into the microphone so the voice recorder logs your explanation properly.`,
+        ];
+        dynamicReply = generalBanter[Math.floor(Math.random() * generalBanter.length)];
+      }
+
+      addMessage('AGENT', dynamicReply, undefined, false);
+      speechEngine.speakRepresentative(dynamicReply, voiceOpts, () => {
+        if (!hasTriggeredHoldThreatRef.current && Math.random() < 0.40) {
+          triggerHoldThreat();
+        } else if (isMicActive) {
+          micAnalyzer.startListening();
+        }
+      });
     }
   };
 
@@ -1127,8 +1199,17 @@ export default function App() {
           <button
             type="button"
             onClick={handleShuffleMission}
-            className="p-1 text-white/75 hover:text-white transition cursor-pointer"
-            title="Switch reason for calling Centrelink"
+            disabled={isCallActive}
+            className={`p-1 transition ${
+              isCallActive
+                ? 'opacity-30 cursor-not-allowed text-white/40'
+                : 'text-white/75 hover:text-white cursor-pointer active:scale-95'
+            }`}
+            title={
+              isCallActive
+                ? 'Reason locked during active call'
+                : 'Switch reason for calling Centrelink'
+            }
           >
             <Shuffle className="w-3.5 h-3.5" />
           </button>
@@ -1209,6 +1290,8 @@ export default function App() {
         callStatus={callStatus}
         isOpen={isDrawerOpen}
         onToggle={() => setIsDrawerOpen(!isDrawerOpen)}
+        onSelectMission={handleSelectMission}
+        onShuffleMission={handleShuffleMission}
       />
 
       {/* Initial / Change Difficulty Modal */}

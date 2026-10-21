@@ -1,7 +1,16 @@
 import React, { useState } from 'react';
-import { Key, Music, Shield, ExternalLink, X, CheckCircle2, AlertCircle, Trash2, Volume2 } from 'lucide-react';
-import { getStoredApiKey, setStoredApiKey, clearStoredApiKey, hasClientGeminiKey } from '../utils/geminiClient';
+import { Key, Music, Shield, X, CheckCircle2, AlertCircle, Trash2, Volume2, Sparkles, Lock, RefreshCw, Play } from 'lucide-react';
+import {
+  isSiteWideKeyLoaded,
+  hasCustomUserKey,
+  getCustomUserKey,
+  setStoredApiKey,
+  clearStoredApiKey,
+  hasClientGeminiKey,
+  testGeminiApiKey,
+} from '../utils/geminiClient';
 import { holdMusic } from '../audio/holdSynthesizer';
+import { speechEngine } from '../audio/speechEngine';
 import { triggerHaptic } from '../utils/haptics';
 
 interface SettingsModalProps {
@@ -10,24 +19,55 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
-  const [apiKeyInput, setApiKeyInput] = useState<string>(getStoredApiKey());
+  const [isCustomMode, setIsCustomMode] = useState<boolean>(() => hasCustomUserKey() || !isSiteWideKeyLoaded());
+  const [customKeyInput, setCustomKeyInput] = useState<string>(() => getCustomUserKey());
+  const [testingStatus, setTestingStatus] = useState<{ isTesting: boolean; result?: { success: boolean; message: string } }>({
+    isTesting: false,
+  });
   const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
   const [audioFileName, setAudioFileName] = useState<string>('');
+  const [voiceTesting, setVoiceTesting] = useState<boolean>(false);
 
   if (!isOpen) return null;
 
-  const handleSaveKey = () => {
+  const siteKeyLoaded = isSiteWideKeyLoaded();
+
+  const handleTestKey = async () => {
+    triggerHaptic('medium');
+    setTestingStatus({ isTesting: true });
+    const keyToTest = isCustomMode ? customKeyInput : undefined;
+    const res = await testGeminiApiKey(keyToTest);
+    setTestingStatus({ isTesting: false, result: res });
+    if (res.success) {
+      triggerHaptic('heavy');
+    } else {
+      triggerHaptic('error');
+    }
+  };
+
+  const handleSaveCustomKey = () => {
     triggerHaptic('heavy');
-    setStoredApiKey(apiKeyInput);
+    setStoredApiKey(customKeyInput);
     setSaveSuccess(true);
     setTimeout(() => setSaveSuccess(false), 2500);
   };
 
-  const handleClearKey = () => {
-    triggerHaptic('medium');
+  const handleRevertToBuiltIn = () => {
+    triggerHaptic('selection');
     clearStoredApiKey();
-    setApiKeyInput('');
-    setSaveSuccess(false);
+    setCustomKeyInput('');
+    setIsCustomMode(false);
+    setTestingStatus({ isTesting: false });
+  };
+
+  const handleTestVoice = () => {
+    triggerHaptic('selection');
+    setVoiceTesting(true);
+    speechEngine.speakRepresentative(
+      "G'day mate, Centrelink Services, Darren speaking. System's running a bit slow today, but I'm here. How can I help sort your dispute?",
+      { gender: 'male', voiceHints: ['Russell', 'Lee', 'en-AU', 'male'] },
+      () => setVoiceTesting(false)
+    );
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -49,8 +89,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
               <Key className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="font-bold text-sm">Settings & GitHub Pages Guide</h3>
-              <p className="text-[11px] text-slate-500">API Key Privacy & Custom Hold Music</p>
+              <h3 className="font-bold text-sm">Settings & AI Status</h3>
+              <p className="text-[11px] text-slate-500">Gemini AI Configuration & Audio Controls</p>
             </div>
           </div>
           <button
@@ -62,12 +102,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
           </button>
         </div>
 
-        {/* Section 1: Gemini API Key */}
+        {/* Section 1: Gemini AI Status & Uneditable Built-in Key */}
         <div className="space-y-3 mb-5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold flex items-center gap-1.5 text-slate-900 dark:text-slate-100">
               <Shield className="w-3.5 h-3.5 text-emerald-500" />
-              Gemini API Key Configuration
+              Gemini AI Status
             </span>
             <span
               className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
@@ -76,134 +116,178 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
                   : 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
               }`}
             >
-              {hasClientGeminiKey() ? 'AI Active' : 'Keyword Fallback Active'}
+              {hasClientGeminiKey() ? '✨ AI Loaded & Active' : '💾 Local Mode'}
             </span>
           </div>
 
-          {/* Guide for Everyone to use on GitHub Pages */}
-          <div className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed bg-slate-50 dark:bg-slate-950 p-3 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2">
-            <div>
-              <strong className="text-slate-800 dark:text-slate-200">Want everyone on your website to use your key?</strong>
-              <p className="mt-1">
-                You can provide a single key for all visitors without exposing it in your git source code:
+          {/* State A: Built-in Site Key is Loaded (Uneditable & Hidden from view) */}
+          {siteKeyLoaded && !isCustomMode ? (
+            <div className="p-3.5 rounded-2xl bg-gradient-to-br from-emerald-50 to-teal-50 dark:from-emerald-950/30 dark:to-teal-950/20 border border-emerald-200 dark:border-emerald-800 space-y-2.5">
+              <div className="flex items-center gap-2 text-emerald-800 dark:text-emerald-300 font-bold text-xs">
+                <Lock className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Built-in Gemini AI Loaded (Protected)</span>
+              </div>
+              <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
+                The site deployment includes a pre-configured Gemini AI key that powers the representatives for all visitors. The key is securely loaded and uneditable.
               </p>
-              <ol className="list-decimal list-inside mt-1 space-y-0.5 text-slate-600 dark:text-slate-400">
-                <li>In your GitHub repo, go to <strong>Settings</strong> &gt; <strong>Secrets and variables</strong> &gt; <strong>Actions</strong></li>
-                <li>Add a new secret named <code className="text-blue-500 font-mono">GEMINI_API_KEY</code> with your key</li>
-                <li>The deploy workflow will automatically build your key into the site for all visitors!</li>
-              </ol>
-            </div>
-            <div className="pt-1 border-t border-slate-200 dark:border-slate-800">
-              <strong className="text-slate-800 dark:text-slate-200">Or paste your key below for private testing:</strong>
-              <p className="mt-0.5 text-[10px]">
-                Saved securely in this browser&apos;s <code className="text-blue-500">localStorage</code> only.
-              </p>
-            </div>
-          </div>
 
-          <div className="space-y-2">
-            <div className="relative">
-              <input
-                type="password"
-                value={apiKeyInput}
-                onChange={(e) => setApiKeyInput(e.target.value)}
-                placeholder="AIzaSy... (Paste Gemini API Key)"
-                className="w-full text-xs px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 pr-10 font-mono"
-              />
-              {apiKeyInput && (
+              <div className="pt-1 flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={handleClearKey}
-                  className="absolute right-2 top-2.5 p-1 text-slate-400 hover:text-red-500 transition"
-                  title="Clear key"
+                  onClick={handleTestKey}
+                  disabled={testingStatus.isTesting}
+                  className="py-1.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition active:scale-95 flex items-center gap-1.5 cursor-pointer shadow-sm disabled:opacity-50"
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>{testingStatus.isTesting ? 'Testing AI...' : 'Test AI Connection'}</span>
                 </button>
-              )}
+                <button
+                  type="button"
+                  onClick={() => setIsCustomMode(true)}
+                  className="py-1.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium transition cursor-pointer"
+                >
+                  Override with Custom Key
+                </button>
+              </div>
             </div>
+          ) : (
+            /* State B: Custom Key Input Mode */
+            <div className="space-y-3">
+              <div className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed bg-slate-50 dark:bg-slate-950 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
+                <span>Enter your own personal Gemini API key below to test or override the site's default AI:</span>
+              </div>
 
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={handleSaveKey}
-                className="flex-1 py-2 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
-              >
-                {saveSuccess ? (
-                  <>
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    Saved to Browser
-                  </>
-                ) : (
-                  'Save Key Locally'
+              <div className="relative">
+                <input
+                  type="password"
+                  value={customKeyInput}
+                  onChange={(e) => setCustomKeyInput(e.target.value)}
+                  placeholder="AIzaSy... (Paste Personal Gemini Key)"
+                  className="w-full text-xs px-3 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500 pr-10 font-mono"
+                />
+                {customKeyInput && (
+                  <button
+                    type="button"
+                    onClick={() => setCustomKeyInput('')}
+                    className="absolute right-2 top-2.5 p-1 text-slate-400 hover:text-red-500 transition"
+                    title="Clear"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 )}
-              </button>
-              <a
-                href="https://aistudio.google.com/app/apikey"
-                target="_blank"
-                rel="noreferrer"
-                className="py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium transition flex items-center gap-1"
-              >
-                <span>Get Key</span>
-                <ExternalLink className="w-3 h-3" />
-              </a>
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleSaveCustomKey}
+                  className="flex-1 py-2 px-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold transition active:scale-95 flex items-center justify-center gap-1.5 cursor-pointer shadow-sm"
+                >
+                  {saveSuccess ? (
+                    <>
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Saved</span>
+                    </>
+                  ) : (
+                    <span>Save Key</span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleTestKey}
+                  disabled={testingStatus.isTesting}
+                  className="py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition active:scale-95 flex items-center justify-center gap-1 cursor-pointer disabled:opacity-50"
+                >
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>{testingStatus.isTesting ? 'Testing...' : 'Test Key'}</span>
+                </button>
+                {siteKeyLoaded && (
+                  <button
+                    type="button"
+                    onClick={handleRevertToBuiltIn}
+                    className="py-2 px-3 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-medium hover:bg-slate-200 dark:hover:bg-slate-700 transition"
+                    title="Revert to built-in key"
+                  >
+                    Revert
+                  </button>
+                )}
+              </div>
             </div>
+          )}
+
+          {/* Test Result Feedback Box */}
+          {testingStatus.result && (
+            <div
+              className={`p-3 rounded-xl text-xs flex items-start gap-2 animate-in fade-in duration-150 ${
+                testingStatus.result.success
+                  ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-200 border border-emerald-300 dark:border-emerald-800'
+                  : 'bg-red-50 dark:bg-red-950/40 text-red-800 dark:text-red-200 border border-red-300 dark:border-red-800'
+              }`}
+            >
+              {testingStatus.result.success ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+              )}
+              <div className="flex-1 leading-relaxed">
+                <strong className="block mb-0.5">
+                  {testingStatus.result.success ? 'AI Key Verified & Active!' : 'Connection Check Failed'}
+                </strong>
+                <span>{testingStatus.result.message}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Section 2: Voice Preview */}
+        <div className="space-y-3 pt-3 border-t border-slate-200 dark:border-slate-800 mb-5">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold flex items-center gap-1.5 text-slate-900 dark:text-slate-100">
+              <Volume2 className="w-3.5 h-3.5 text-blue-500" />
+              Representative Voice Check
+            </span>
+          </div>
+          <div className="flex items-center justify-between p-3 rounded-xl bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800">
+            <div className="text-[11px] text-slate-600 dark:text-slate-400">
+              <span>Test human speech synthesis:</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleTestVoice}
+              disabled={voiceTesting}
+              className="py-1 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium transition active:scale-95 flex items-center gap-1 cursor-pointer disabled:opacity-50"
+            >
+              <Play className="w-3 h-3 fill-current" />
+              <span>{voiceTesting ? 'Speaking...' : 'Preview Voice'}</span>
+            </button>
           </div>
         </div>
 
-        {/* Section 2: Custom Hold Music (Opus No. 1) */}
-        <div className="space-y-3 mb-5 border-t border-slate-200 dark:border-slate-800 pt-4">
-          <span className="text-xs font-semibold flex items-center gap-1.5 text-slate-900 dark:text-slate-100">
-            <Music className="w-3.5 h-3.5 text-indigo-500" />
-            Hold Music (Opus No. 1 by Tim Carleton)
-          </span>
+        {/* Section 3: Custom Hold Music */}
+        <div className="space-y-3 pt-3 border-t border-slate-200 dark:border-slate-800">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold flex items-center gap-1.5 text-slate-900 dark:text-slate-100">
+              <Music className="w-3.5 h-3.5 text-blue-500" />
+              Hold Music (Opus No. 1 or Custom MP3)
+            </span>
+          </div>
 
-          <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed bg-slate-50 dark:bg-slate-950 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
-            <strong>Drop-in MP3 Support:</strong>
-            <br />
-            1. You can drop any MP3 file named <code className="text-indigo-500 font-mono">opus-no-1.mp3</code> into your repository&apos;s <code className="text-indigo-500 font-mono">public/</code> directory.
-            <br />
-            2. Or select any audio file on your device right now:
+          <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
+            By default, the simulator procedurally generates Tim Carleton&apos;s iconic <strong>&quot;Opus No. 1&quot;</strong>. You can drag and drop any MP3 anywhere onto the screen, or upload one here:
           </p>
 
-          <div className="flex items-center gap-2">
-            <label className="flex-1 cursor-pointer">
-              <input
-                type="file"
-                accept="audio/*"
-                onChange={handleFileUpload}
-                className="hidden"
-              />
-              <div className="w-full py-2 px-3 rounded-xl border border-dashed border-indigo-300 dark:border-indigo-700 hover:border-indigo-500 bg-indigo-50/50 dark:bg-indigo-950/30 text-indigo-700 dark:text-indigo-300 text-xs font-medium flex items-center justify-center gap-1.5 transition">
-                <Volume2 className="w-3.5 h-3.5" />
-                <span>{audioFileName ? `Loaded: ${audioFileName}` : 'Select MP3 File to Play'}</span>
-              </div>
-            </label>
-          </div>
-        </div>
-
-        {/* Section 3: Screaming & Anti-Abuse Rules Guide */}
-        <div className="space-y-2 border-t border-slate-200 dark:border-slate-800 pt-4">
-          <span className="text-xs font-semibold flex items-center gap-1.5 text-slate-900 dark:text-slate-100">
-            <AlertCircle className="w-3.5 h-3.5 text-amber-500" />
-            Hostility & Anti-Abuse Rules
-          </span>
-          <div className="text-[10px] text-slate-500 dark:text-slate-400 space-y-1 bg-slate-50 dark:bg-slate-950 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
-            <p>• <strong>Scream Tolerance:</strong> You can shout (&gt;82 dB) up to 6 times before getting booted to the queue. Representatives will attempt to de-escalate and calm you down.</p>
-            <p>• <strong>10s Immunity Cooldown:</strong> After shouting, a 10-second delay prevents logging duplicate strikes for the same outburst.</p>
-            <p>• <strong>2-Minute Reset:</strong> Maintaining 2 minutes of calm dialogue clears all hostility strikes.</p>
-            <p>• <strong>Severe Offensive Abuse:</strong> Explicit threats or severe offensive slurs result in immediate line termination with no warnings.</p>
-          </div>
-        </div>
-
-        {/* Done Button */}
-        <div className="pt-4 mt-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="w-full py-2.5 rounded-2xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-bold transition hover:opacity-90 active:scale-98"
-          >
-            Close Settings
-          </button>
+          <label className="flex flex-col items-center justify-center p-3 border-2 border-dashed border-slate-300 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800/50 transition cursor-pointer group">
+            <Music className="w-6 h-6 text-slate-400 group-hover:text-blue-500 mb-1 transition" />
+            <span className="text-xs font-medium text-slate-700 dark:text-slate-300">
+              {audioFileName ? `Loaded: ${audioFileName}` : 'Choose Custom MP3 File'}
+            </span>
+            <input
+              type="file"
+              accept=".mp3,audio/*"
+              onChange={handleFileUpload}
+              className="hidden"
+            />
+          </label>
         </div>
       </div>
     </div>

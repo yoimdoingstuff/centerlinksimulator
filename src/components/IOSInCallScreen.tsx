@@ -12,6 +12,7 @@ import {
   User,
   Flame,
   AlertTriangle,
+  Sparkles,
 } from 'lucide-react';
 import { holdMusic } from '../audio/holdSynthesizer';
 import { speechEngine } from '../audio/speechEngine';
@@ -252,13 +253,21 @@ export const IOSInCallScreen: React.FC<IOSInCallScreenProps> = ({
       >
         {lastMessage ? (
           <div>
-            <span className="text-[10px] font-bold uppercase tracking-wider block text-white/70 mb-0.5 sticky top-0 bg-transparent">
-              {lastMessage.sender === 'USER'
-                ? 'You said:'
-                : lastMessage.sender === 'AGENT'
-                ? `${agentName || 'Sharon'} (Centrelink):`
-                : 'Centrelink IVR:'}
-            </span>
+            <div className="flex items-center justify-between mb-0.5 sticky top-0 bg-transparent">
+              <span className="text-[10px] font-bold uppercase tracking-wider block text-white/70">
+                {lastMessage.sender === 'USER'
+                  ? 'You said:'
+                  : lastMessage.sender === 'AGENT'
+                  ? `${agentName || 'Sharon'} (Centrelink):`
+                  : 'Centrelink IVR:'}
+              </span>
+              {lastMessage.isAiPowered && (
+                <span className="text-[9px] px-1.5 py-0.2 rounded-full bg-blue-500/30 border border-blue-400/40 text-blue-200 font-medium normal-case flex items-center gap-1 shadow-xs">
+                  <Sparkles className="w-2.5 h-2.5 text-blue-300" />
+                  AI Powered
+                </span>
+              )}
+            </div>
             <p className="font-light whitespace-pre-wrap break-words">{lastMessage.text}</p>
           </div>
         ) : (
@@ -387,8 +396,7 @@ export const IOSInCallScreen: React.FC<IOSInCallScreenProps> = ({
           <button
             type="button"
             onClick={() => {
-              triggerHaptic('selection');
-              alert('FaceTime is not available with Centrelink.');
+              triggerHaptic('light');
             }}
             className="flex flex-col items-center gap-1.5 cursor-pointer opacity-40"
           >
@@ -403,7 +411,6 @@ export const IOSInCallScreen: React.FC<IOSInCallScreenProps> = ({
             type="button"
             onClick={() => {
               triggerHaptic('selection');
-              alert('Contacts: Centrelink 132 850');
             }}
             className="flex flex-col items-center gap-1.5 cursor-pointer"
           >

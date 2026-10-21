@@ -5,16 +5,33 @@ import { getSiteWideApiKey } from '../config/geminiConfig';
 
 const STORAGE_KEY = 'centrelink_gemini_api_key';
 
+export function hasCustomUserKey(): boolean {
+  try {
+    const val = localStorage.getItem(STORAGE_KEY);
+    return !!(val && val.trim().length > 10);
+  } catch {
+    return false;
+  }
+}
+
+export function getCustomUserKey(): string {
+  try {
+    return localStorage.getItem(STORAGE_KEY) || '';
+  } catch {
+    return '';
+  }
+}
+
+export function isSiteWideKeyLoaded(): boolean {
+  return !!getSiteWideApiKey();
+}
+
 export function getStoredApiKey(): string {
   try {
     const local = localStorage.getItem(STORAGE_KEY);
     if (local && local.trim().length > 10) return local.trim();
   } catch {}
   return getSiteWideApiKey();
-}
-
-export function isSiteWideKeyActive(): boolean {
-  return !!getSiteWideApiKey();
 }
 
 let clientAi: GoogleGenAI | null = null;
@@ -61,6 +78,35 @@ export function hasClientGeminiKey(): boolean {
   return !!clientAi;
 }
 
+export async function testGeminiApiKey(candidateKey?: string): Promise<{ success: boolean; message: string }> {
+  const keyToTest = (candidateKey && candidateKey.trim()) || getStoredApiKey();
+  if (!keyToTest || keyToTest === 'MY_GEMINI_API_KEY' || keyToTest.trim().length < 10) {
+    return { success: false, message: 'No Gemini API key provided. Please enter a valid key.' };
+  }
+
+  const models = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-3.8-flash'];
+  let lastError = '';
+
+  for (const model of models) {
+    try {
+      const testAi = new GoogleGenAI({ apiKey: keyToTest.trim() });
+      const response = await testAi.models.generateContent({
+        model,
+        contents: "Respond in under 10 words: G'day mate! Centrelink AI is connected and ready.",
+      });
+      const text = response.text?.trim() || "Connected!";
+      return { success: true, message: `Connected with ${model}: "${text}"` };
+    } catch (err: any) {
+      lastError = err?.message || String(err);
+    }
+  }
+
+  return {
+    success: false,
+    message: `API connection failed: ${lastError.slice(0, 130) || 'Invalid key or network error'}`,
+  };
+}
+
 export async function generateClientIVR(params: {
   speechText: string;
   volumeDb: number;
@@ -70,41 +116,47 @@ export async function generateClientIVR(params: {
 }): Promise<{
   robocallerResponseText: string;
   action: string;
-  callerDelta: number;
-  nextMenu: string;
+  callerDelta?: number;
+  nextMenu?: string;
 } | null> {
   if (!clientAi) return null;
 
-  try {
-    const isFirm = params.volumeDb >= 58 && params.volumeDb < 82;
-    const response = await clientAi.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: `You are the automated Services Australia (Centrelink) telephone robocaller IVR system.
-The caller is trying to solve: "${params.promptTask}".
+  const models = ['gemini-2.5-flash', 'gemini-flash-latest', 'gemini-3.8-flash'];
+  for (const model of models) {
+    try {
+      const isFirm = params.volumeDb >= 55 && params.volumeDb < 82;
+      const response = await clientAi.models.generateContent({
+        model,
+        contents: `You are an automated Centrelink Interactive Voice Response (IVR) telephone robot.
 Current Menu: "${params.currentMenu}".
-Caller said: "${params.speechText}". Loudness: ${params.volumeDb} dB.
-Is firm & assertive: ${isFirm}. Difficulty: ${params.difficulty}.
+User Loudness: ${params.volumeDb} dB.
+User Speech: "${params.speechText}".
+Target Task: "${params.promptTask}".
+Difficulty: ${params.difficulty}.
 
-Strict Rules:
-1. Speak in a robotic, frustrating bureaucratic Australian telephone prompt under 35 words.
-2. If caller speech is gibberish, random sounds, coughing, or unrelated words, DO NOT advance! Respond that you did not catch that and ask them to select a valid option or press 1.
-3. If they say relevant keywords ("jobseeker", "breach", "payment", "dispute", "transfer", "officer", "representative", "demerit") with firm urgency (58-81 dB), transfer them: "Transferring you to the queue for a customer service officer."
-4. Format strictly as JSON with keys: "responseText", "action" ("TRANSFER_QUEUE" | "MENU_LOOP" | "MISUNDERSTOOD"), "queuePenalty" (number), "nextMenu".`,
-      config: {
-        responseMimeType: 'application/json',
-      },
-    });
+Instructions:
+1. If user is in the wrong department or speaking about a different department, announce you are redirecting them to the correct queue!
+2. If user spoke with firm assertive tone (55-81 dB) and requested help or dispute, action is "TRANSFER_QUEUE".
+3. If volume < 45 dB or mumbling, loop them with a typical bureaucratic automated response.
+4. Keep under 30 words in mechanical telephone IVR phrasing.
+5. Format strictly as JSON with keys: "responseText", "action" ("TRANSFER_QUEUE" | "MENU_LOOP" | "KICK_TO_BACK"), "queuePenalty" (number), "nextMenu" (string).`,
+        config: {
+          responseMimeType: 'application/json',
+        },
+      });
 
-    const parsed = JSON.parse(response.text || '{}');
-    return {
-      robocallerResponseText: parsed.responseText,
-      action: parsed.action || (isFirm ? 'TRANSFER_QUEUE' : 'MENU_LOOP'),
-      callerDelta: parsed.queuePenalty || 0,
-      nextMenu: parsed.nextMenu || 'MAIN_MENU',
-    };
-  } catch {
-    return null;
+      const parsed = JSON.parse(response.text || '{}');
+      return {
+        robocallerResponseText: parsed.responseText,
+        action: parsed.action || (isFirm ? 'TRANSFER_QUEUE' : 'MENU_LOOP'),
+        callerDelta: parsed.queuePenalty || 0,
+        nextMenu: parsed.nextMenu || 'MAIN_MENU',
+      };
+    } catch {
+      continue;
+    }
   }
+  return null;
 }
 
 export async function generateClientAgent(params: {
@@ -115,45 +167,62 @@ export async function generateClientAgent(params: {
   holdTimeSeconds: number;
   difficulty: string;
   screamStrikes?: number;
+  currentDepartment?: string;
 }): Promise<{
   agentResponseText: string;
   approved: boolean;
   agentState: string;
+  targetDepartment?: string;
 } | null> {
   if (!clientAi) return null;
 
-  try {
-    const rep = params.representative;
-    const response = await clientAi.models.generateContent({
-      model: 'gemini-3.8-flash',
-      contents: `You are "${rep.name}", a human Centrelink ${rep.title} in Australia.
-Heritage & Tone: ${rep.heritage}.
-CRITICAL PERSONALITY INSTRUCTION: You are a real Australian human working in an overburdened call centre. You NEVER speak like a bot, automated assistant, or AI. Use natural conversational Australian speech with realistic hesitations, sighs, colloquialisms ('look mate', 'rightio', 'hang on a sec', 'fair enough', 'yeah no worries'), and typing pauses.
-Player Mission: "${params.activeMission.title} - ${params.activeMission.description}".
-Required Key Mission Concepts: "${params.activeMission.keyPhrases.join(', ')}".
+  const rep = params.representative;
+  const currentDept = params.currentDepartment || params.activeMission.targetDepartment;
+  const isWrongDept = currentDept !== params.activeMission.targetDepartment;
+  const models = ['gemini-2.5-flash', 'gemini-2.5-pro'];
+
+  for (const model of models) {
+    try {
+      const response = await clientAi.models.generateContent({
+        model,
+        contents: `You are "${rep.name}", a human Centrelink ${rep.title} in Australia.
+Heritage & Personality: ${rep.heritage}.
+Your Current Department: "${currentDept}".
+Caller's Required Department: "${params.activeMission.targetDepartment}".
+Is Caller in Wrong Department right now?: ${isWrongDept ? 'YES - THEY ARE IN THE WRONG QUEUE!' : 'NO - CORRECT QUEUE'}.
+CRITICAL INSTRUCTION: You are a genuine Australian human public servant. NEVER talk like an AI or corporate bot. Speak with real Australian call-centre colloquialisms ('look mate', 'fair dinkum', 'hang on a tick', 'rightio', 'yeah no worries', 'ah geez', 'pull ya head in').
+Current Case File: "${params.activeMission.title} - ${params.activeMission.description}".
 Caller Loudness: ${params.volumeDb} dB.
-Caller said: "${params.speechText}".
-Hold time endured: ${params.holdTimeSeconds}s.
-Current Scream Warning Strikes: ${params.screamStrikes || 0}/6.
+Caller just said: "${params.speechText}".
+Hold time endured by caller: ${params.holdTimeSeconds} seconds.
+Scream Strikes: ${params.screamStrikes || 0}/6.
 
-Strict Assessment Rules:
-1. If caller makes random noises, mumbling, coughing, or says things with NO relation to the mission keywords, DO NOT approve! In character as a bewildered or tired human agent, tell them that made no sense and ask what's actually gone wrong with their paperwork or appointment.
-2. If caller is screaming (> 82 dB), do NOT immediately hang up unless at strike 6; instead, try to calm them down in your distinct Australian personality.
-3. If caller explains with firm clarity (52-80 dB) and articulates the key facts of their dispute (e.g. medical cert, provider scanner down, casual earnings), APPROVE the claim and wipe the penalty!
-4. Keep response concise (under 45 words), sounding like a genuine human Australian officer.
-5. Format strictly as JSON with keys: "responseText", "approved" (boolean), "agentState" ("CONVERSING" | "CLAIM_APPROVED" | "PUT_ON_HOLD_AGAIN").`,
-      config: {
-        responseMimeType: 'application/json',
-      },
-    });
+CONVERSATION RULES (Respond dynamically to ANYTHING the caller says):
+1. WRONG DEPARTMENT RULE: If the caller is in the wrong department (${isWrongDept ? 'THEY ARE IN WRONG DEPT!' : 'NO'}) or asks for a different department, tell them: "Whoa, hold on mate! You've come through to ${currentDept}, but your file needs ${params.activeMission.targetDepartment}. Don't hang up, I'm transferring you straight over right now." Set agentState to "TRANSFER_WRONG_DEPT".
+2. The caller may say ANYTHING to you: small talk, jokes, complaints about the hold music, venting, asking how you are, making excuses, or explaining their case.
+3. RESPOND NATURALLY AND DYNAMICALLY TO WHATEVER THEY SAY! Never give canned or repetitive responses. You have infinite options for what to say.
+4. If they ask about Centrelink or your day, give a weary, humorous Australian worker response (drinking cold blend 43 coffee, computer freezing, supervisor hovering).
+5. If they explain their case facts (doctor certificate, scanner offline, casual earnings, cousin in Dubbo, rent lease), react specifically to what they tell you.
+6. If they clearly explain and justify their dispute in a firm, reasonable tone (50-80 dB), approve their claim and lift the suspension (set "approved": true, agentState: "CLAIM_APPROVED")!
+7. If they scream (> 82 dB), tell them to pull their head in and calm down.
+8. Keep response concise (under 45 words), natural, and human.
+9. Format strictly as JSON with keys: "responseText", "approved" (boolean), "agentState" ("CONVERSING" | "CLAIM_APPROVED" | "PUT_ON_HOLD_AGAIN" | "TRANSFER_WRONG_DEPT").`,
+        config: {
+          responseMimeType: 'application/json',
+        },
+      });
 
-    const parsed = JSON.parse(response.text || '{}');
-    return {
-      agentResponseText: parsed.responseText,
-      approved: !!parsed.approved,
-      agentState: parsed.agentState || 'CONVERSING',
-    };
-  } catch {
-    return null;
+      const parsed = JSON.parse(response.text || '{}');
+      return {
+        agentResponseText: parsed.responseText,
+        approved: !!parsed.approved,
+        agentState: parsed.agentState || 'CONVERSING',
+        targetDepartment: params.activeMission.targetDepartment,
+      };
+    } catch {
+      continue;
+    }
   }
+
+  return null;
 }

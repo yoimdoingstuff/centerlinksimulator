@@ -1,6 +1,7 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { GoogleGenAI } from '@google/genai';
 
@@ -10,7 +11,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 app.use(express.json());
 
@@ -253,25 +254,31 @@ app.post('/api/call/agent', async (req, res) => {
 
   if (ai) {
     try {
+      const currentDept = req.body.currentDepartment || activeMission?.targetDepartment;
+      const isWrongDept = currentDept && activeMission?.targetDepartment && currentDept !== activeMission.targetDepartment;
+
       const response = await ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: 'gemini-2.5-flash',
         contents: `You are "${repName}", a real Australian human working as a Centrelink ${repTitle} in Australia.
 Background/Heritage: ${repHeritage}.
+Current Department: "${currentDept}".
+Case Department Needed: "${activeMission?.targetDepartment}".
+Is Caller in Wrong Department?: ${isWrongDept ? 'YES' : 'NO'}.
 CRITICAL PERSONALITY INSTRUCTION: You are an authentic Australian human working in an overburdened public service call centre with slow departmental computers, typing on a mechanical keyboard. You NEVER sound like an AI, corporate bot, or automated system. Speak in authentic, weary Australian call centre colloquialisms reflecting your background ('look mate', 'rightio', 'hang on a tick', 'fair enough', 'yeah no worries', 'ah geez').
-Player Mission to Solve: "${activeMission?.title} - ${activeMission?.description}".
-Required Key Concepts: "${activeMission?.keyPhrases?.join(', ')}".
+Player Mission: "${activeMission?.title} - ${activeMission?.description}".
 Caller's Loudness: ${volumeDb} dB.
-Caller just said to you: "${speechText}".
+Caller just said: "${speechText}".
 Dialogue History: ${JSON.stringify(dialogueHistory || [])}.
 Hold time survived by caller: ${holdTimeSeconds} seconds.
 Difficulty: ${difficulty}.
 
 Rules:
-1. If caller explains their case clearly with firm urgency (55-80 dB) AND mentions key facts relevant to their mission, and they have provided their explanation, you can finally approve their claim and lift their suspension!
-2. If caller is too timid or vague or mumbled without keywords, give a classic human bureaucratic stalling response ("Look mate, that document format was flagged by the system...") or ask them what on earth happened.
-3. If they scream (> 82 dB), get defensive or try to calm them down.
-4. Keep the response under 45 words, sounding like an everyday human Australian.
-5. Return JSON:
+1. WRONG DEPARTMENT: If the caller is in the wrong department (${isWrongDept ? 'YES' : 'NO'}) or asks for another queue, tell them: "Whoa, hold on mate! You've reached ${currentDept}, but your file needs ${activeMission?.targetDepartment}. I'm transferring you straight over right now." Set agentState: "TRANSFER_WRONG_DEPT".
+2. RESPOND DYNAMICALLY TO ABSOLUTELY ANYTHING THE CALLER SAYS: banter, jokes, venting about the 2-hour hold music, asking how your day is, talking about their job or family, or explaining their case. Never give canned responses!
+3. If caller explains their case clearly with firm urgency (50-80 dB) and explains their dispute facts, approve their claim and lift the suspension (set approved: true, agentState: "CLAIM_APPROVED")!
+4. If they scream (> 82 dB), tell them to calm down.
+5. Keep the response under 45 words, sounding like an everyday human Australian.
+6. Return JSON:
 - "responseText": String
 - "agentState": "CONVERSING" | "PUT_ON_HOLD_AGAIN" | "CLAIM_APPROVED" | "TRANSFER_WRONG_DEPT"
 - "mood": "TIRED" | "ANNOYED" | "RELUCTANTLY_HELPFUL" | "SYMPATHETIC"
@@ -289,6 +296,8 @@ Rules:
         agentState: parsed.agentState || 'CONVERSING',
         mood: parsed.mood || 'TIRED',
         approved: !!parsed.approved,
+        isAiPowered: true,
+        targetDepartment: activeMission?.targetDepartment,
       });
     } catch (err) {
       console.error('Gemini Agent error:', err);
@@ -306,30 +315,45 @@ Rules:
       agentState: 'CLAIM_APPROVED',
       mood: 'RELUCTANTLY_HELPFUL',
       approved: true,
+      isAiPowered: false,
     });
   }
 
+  // Multi-option conversational offline fallback
+  const offlineOptions = [
+    `Centrelink Services, ${repName} speaking. Yeah look, system's running a bit slow today. What's the story with your case?`,
+    `G'day mate, ${repName} here. I'm looking at your CRN now. Go ahead and tell me what happened with your appointment or payment.`,
+    `Rightio, ${repName} here. Sorry about the hold time, our phones have been ringing off the hook since 8am. How can I help you sort this out?`,
+    `Yeah look, I hear ya. Computers are crawling today. Talk to me—what's the dispute about your mutual obligations or reporting?`,
+  ];
   return res.json({
-    agentResponseText: `Centrelink Services, ${repName} speaking. Yeah look, I can see something on your screen here, but the server's running slow. Can you clearly state why you believe this decision is incorrect?`,
+    agentResponseText: offlineOptions[Math.floor(Math.random() * offlineOptions.length)],
     agentState: 'CONVERSING',
     mood: 'TIRED',
     approved: false,
+    isAiPowered: false,
   });
 });
 
-// Mount Vite or serve static
-if (process.env.NODE_ENV !== 'production') {
+// Mount Vite in dev mode or serve built static files
+const distPath = path.resolve(__dirname, 'dist');
+const hasDist = fs.existsSync(path.join(distPath, 'index.html'));
+
+if (process.env.NODE_ENV === 'production' && hasDist) {
+  app.use(express.static(distPath));
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
+} else {
   const { createServer: createViteServer } = await import('vite');
   const vite = await createViteServer({
-    server: { middlewareMode: true },
+    server: {
+      middlewareMode: true,
+      hmr: process.env.DISABLE_HMR !== 'true',
+    },
     appType: 'spa',
   });
   app.use(vite.middlewares);
-} else {
-  app.use(express.static(path.resolve(__dirname, 'dist')));
-  app.get('*', (_req, res) => {
-    res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
-  });
 }
 
 app.listen(port, '0.0.0.0', () => {
